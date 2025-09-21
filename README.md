@@ -95,6 +95,18 @@ Notes:
 - Netlify Functions here return a fast lexical (BM25) answer. Streaming and hybrid dense retrieval run in the full FastAPI backend (see below) or can be added later under function time limits.
 - Heavy ingestion should run via CLI or a dedicated backend service, not as Functions (due to runtime and memory limits).
 
+### FastAPI on AWS Lambda (serverless API) + Netlify UI
+- We include an AWS Lambda wrapper for `webapp.py` using Mangum (ASGI → Lambda): see `lambda_function.py` and `serverless.yml`.
+- Deploy with Serverless Framework or AWS SAM. After deploy, set Netlify redirect to your API Gateway URL:
+```toml
+[[redirects]]
+from = "/api/*"
+to = "https://<api-id>.execute-api.<region>.amazonaws.com/:splat"
+status = 200
+force = true
+```
+- Env vars (in AWS): `DATABASE_URL` (Neon DSN), `OPENAI_API_KEY`, optional `CORS_ORIGINS`.
+
 ## Ingestion
 
 ### Local files (PDF, DOCX, TXT)
