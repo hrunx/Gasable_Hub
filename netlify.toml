@@ -1,0 +1,16 @@
+[build]
+publish = "."
+
+# Proxy API calls from Netlify domain to your running API service
+# Set API_URL in Netlify env to your backend base, e.g. https://api.gasablehub.com
+[[redirects]]
+from = "/api/*"
+to = "${API_URL}/:splat"
+status = 200
+force = true
+
+# Route dashboard path to static file
+[[redirects]]
+from = "/dashboard"
+to = "/dashboard.html"
+status = 200

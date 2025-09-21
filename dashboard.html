@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gasable Hub - Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Dashboard</h1>
+    <div class="nav-row"><a href="/">← Back to Chat</a></div>
+    <section>
+      <h2>MCP Status</h2>
+      <pre id="status" class="card"></pre>
+    </section>
+    <section>
+      <h2>Registered MCP Tools</h2>
+      <div id="tools" class="grid"></div>
+    </section>
+    <section>
+      <h2>Database Browser</h2>
+      <div class="db-grid">
+      <div class="card">
+        <div class="section-title">Schemas</div>
+        <ul id="schemas" class="list"></ul>
+      </div>
+        <div class="card">
+          <div class="section-title">Tables</div>
+          <ul id="tables" class="list"></ul>
+        </div>
+        <div class="card" style="grid-column: span 2">
+          <div class="section-title">Table Details</div>
+          <div id="table-meta" class="mono"></div>
+          <div style="margin:8px 0; display:flex; gap:8px; align-items:center">
+            <label for="sampleLimit" class="muted">Rows to show</label>
+            <input id="sampleLimit" type="number" value="200" min="1" max="2000" style="width:100px; padding:4px 6px; background:#0f172a; border:1px solid #2a3550; color:#e8eef9; border-radius:6px" />
+            <button id="reloadSample" style="padding:6px 10px; border:none; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer">Reload</button>
+          </div>
+          <div id="table-sample" class="table-wrap"></div>
+        </div>
+      <div class="card" style="grid-column: span 2">
+        <div class="section-title">Processed File Names (from gasable_index)</div>
+        <div id="files" class="table-wrap mono"></div>
+        <div id="file-entries" class="table-wrap mono" style="margin-top:10px"></div>
+      </div>
+      </div>
+    </section>
+  </div>
+  <script>
+  const API_BASE = (window.API_BASE || window.API_BASE_URL || '/api').replace(/\/$/, '');
+  async function loadStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/status`);
+      const data = await res.json();
+      document.getElementById('status').textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      document.getElementById('status').textContent = String(e);
+    }
+  }
+  async function loadTools() {
+    const el = document.getElementById('tools');
+    el.innerHTML = '';
+    try {
+      const res = await fetch(`${API_BASE}/mcp_tools`);
+      const data = await res.json();
+      if (!data.tools || !Array.isArray(data.tools)) {
+        el.textContent = 'No tools found';
+        return;
+      }
+      data.tools.forEach(t => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        const title = document.createElement('div');
+        title.className = 'tool-title';
+        title.textContent = t.name;
+        const mod = document.createElement('div');
+        mod.className = 'muted';
+        mod.textContent = t.module || '';
+        const desc = document.createElement('div');
+        desc.className = 'desc';
+        desc.textContent = t.description || '';
+        card.appendChild(title);
+        card.appendChild(mod);
+        card.appendChild(desc);
+        el.appendChild(card);
+      });
+    } catch (e) {
+      el.textContent = String(e);
+    }
+  }
+  async function loadSchemas() {
+    const ul = document.getElementById('schemas');
+    ul.innerHTML = '';
+    const res = await fetch(`${API_BASE}/db/schemas`);
+    const data = await res.json();
+    (data.schemas || []).forEach(sch => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = '#'; a.textContent = sch; a.onclick = (e) => { e.preventDefault(); loadTables(sch); };
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+  }
+  async function loadTables(schema) {
+    const ul = document.getElementById('tables');
+    ul.innerHTML = '';
+    const res = await fetch(`${API_BASE}/db/tables`);
+    const data = await res.json();
+    (data.tables || []).filter(t => t.schema === schema).forEach(t => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      const rows = (t.exact_rows ?? t.est_rows) || 0;
+      a.href = '#'; a.textContent = `${t.table} (${rows.toLocaleString()} rows)`;
+      a.onclick = (e) => { e.preventDefault(); loadTableDetails(schema, t.table); };
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+  }
+  async function loadTableDetails(schema, table) {
+    const metaEl = document.getElementById('table-meta');
+    const sampleEl = document.getElementById('table-sample');
+    metaEl.textContent = 'Loading...';
+    sampleEl.textContent = '';
+    const limitInput = document.getElementById('sampleLimit');
+    const limit = Math.max(1, Math.min(parseInt(limitInput.value || '200', 10), 2000));
+    const [colsRes, cntRes, sampRes] = await Promise.all([
+      fetch(`${API_BASE}/db/table/${encodeURIComponent(schema)}/${encodeURIComponent(table)}/columns`),
+      fetch(`${API_BASE}/db/table/${encodeURIComponent(schema)}/${encodeURIComponent(table)}/count`),
+      fetch(`${API_BASE}/db/table/${encodeURIComponent(schema)}/${encodeURIComponent(table)}/sample?limit=${limit}`)
+    ]);
+    const [cols, cnt, samp] = await Promise.all([colsRes.json(), cntRes.json(), sampRes.json()]);
+    metaEl.innerHTML = '';
+    const h = document.createElement('div');
+    h.className = 'muted';
+    h.textContent = `${schema}.${table} — ${cnt.count?.toLocaleString?.() || 0} rows`;
+    const colList = document.createElement('div');
+    colList.className = 'mono';
+    (cols.columns || []).forEach(c => {
+      const row = document.createElement('div');
+      row.textContent = `${c.position}. ${c.name} ${c.type}${c.nullable ? '' : ' NOT NULL'}`;
+      colList.appendChild(row);
+    });
+    metaEl.appendChild(h);
+    metaEl.appendChild(colList);
+    renderSample(sampleEl, samp.columns || [], samp.rows || []);
+    if (schema === 'public' && table === 'gasable_index') {
+      await loadProcessedFiles();
+    } else {
+      document.getElementById('files').innerHTML = '';
+    }
+    document.getElementById('reloadSample').onclick = () => loadTableDetails(schema, table);
+  }
+  async function loadProcessedFiles() {
+    const el = document.getElementById('files');
+    el.textContent = 'Loading...';
+    try {
+      const res = await fetch(`${API_BASE}/processed_files`);
+      const data = await res.json();
+      const rows = data.files || [];
+      if (!rows.length) { el.textContent = 'No file names found.'; return; }
+      const table = document.createElement('table');
+      table.className = 'data-table';
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>File</th><th>Count</th></tr>';
+      const tbody = document.createElement('tbody');
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        const td1 = document.createElement('td');
+        const a = document.createElement('a');
+        a.href = '#'; a.textContent = r.file;
+        a.onclick = (e) => { e.preventDefault(); loadFileEntries(r.file); };
+        td1.appendChild(a);
+        const td2 = document.createElement('td');
+        td2.textContent = (r.count||0).toLocaleString();
+        tr.appendChild(td1); tr.appendChild(td2);
+        tbody.appendChild(tr);
+      });
+      table.appendChild(thead); table.appendChild(tbody);
+      el.innerHTML = ''; el.appendChild(table);
+    } catch (e) {
+      el.textContent = String(e);
+    }
+  }
+  async function loadFileEntries(file) {
+    const box = document.getElementById('file-entries');
+    box.textContent = 'Loading entries...';
+    try {
+      const res = await fetch(`${API_BASE}/file_entries?file=${encodeURIComponent(file)}&limit=500`);
+      const data = await res.json();
+      const entries = data.entries || [];
+      if (!entries.length) { box.textContent = 'No entries found for file.'; return; }
+      const table = document.createElement('table');
+      table.className = 'data-table';
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Chunk</th><th>Text</th><th>Embedding (preview)</th></tr>';
+      const tbody = document.createElement('tbody');
+      entries.forEach(e => {
+        const tr = document.createElement('tr');
+        const td1 = document.createElement('td'); td1.textContent = e.node_id.split('#').slice(-1)[0];
+        const td2 = document.createElement('td'); td2.textContent = (e.text||'').slice(0, 400);
+        const td3 = document.createElement('td'); td3.textContent = e.embedding_preview || (e.embedding ? (e.embedding.slice(0, 200) + '...') : '');
+        tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+        tbody.appendChild(tr);
+      });
+      table.appendChild(thead); table.appendChild(tbody);
+      box.innerHTML = '';
+      const title = document.createElement('div'); title.className = 'muted'; title.textContent = `Entries for: ${file}`;
+      box.appendChild(title);
+      box.appendChild(table);
+    } catch (e) {
+      box.textContent = String(e);
+    }
+  }
+  function renderSample(container, columns, rows) {
+    container.innerHTML = '';
+    if (!columns.length) { container.textContent = 'No rows'; return; }
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const thead = document.createElement('thead');
+    const trh = document.createElement('tr');
+    columns.forEach(c => { const th = document.createElement('th'); th.textContent = c; trh.appendChild(th); });
+    thead.appendChild(trh);
+    const tbody = document.createElement('tbody');
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      r.forEach(v => {
+        const td = document.createElement('td');
+        td.textContent = v === null || v === undefined ? '' : String(v);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    container.appendChild(table);
+  }
+  loadStatus();
+  loadTools();
+  loadSchemas();
+  </script>
+  <style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f1220; color: #e8eef9; }
+  .container { max-width: 1100px; margin: 32px auto; padding: 24px; background: #141a2b; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+  h1 { margin: 0 0 16px; font-size: 22px; letter-spacing: 0.3px; }
+  h2 { font-size: 18px; margin: 18px 0 8px; }
+  .nav-row a { color: #4f8cff; text-decoration: none; }
+  .card { background: #171f34; border: 1px solid #2a3550; border-radius: 10px; padding: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .db-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .list { list-style: none; padding: 0; margin: 0; }
+  .list li { padding: 6px 0; border-bottom: 1px solid #24304a; }
+  .list a { color: #cfe0ff; text-decoration: none; }
+  .list a:hover { color: #ffffff; }
+  .tool-title { font-weight: 600; }
+  .muted { color: #a7b4d6; font-size: 12px; margin: 4px 0; }
+  .desc { margin-top: 6px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
+  .table-wrap { margin-top: 10px; overflow: auto; max-height: 50vh; }
+  table.data-table { width: 100%; border-collapse: collapse; }
+  table.data-table th, table.data-table td { border: 1px solid #2a3550; padding: 6px 8px; text-align: left; }
+  table.data-table th { background: #1b2440; position: sticky; top: 0; }
+  </style>
+</body>
+</html>
+
+
