@@ -1,6 +1,12 @@
 # Gasable Hub – RAG API and Ingestion
 
-Production-ready Retrieval-Augmented Generation (RAG) service for Gasable. Ingest local files, PDFs (Arabic-friendly), web pages (optional Firecrawl OS), and Google Drive into PostgreSQL with pgvector; query via hybrid lexical+dense search with MMR re-ranking and customer-needs oriented answers.
+### What this hub does (for non‑technical readers)
+- **All your energy intelligence in one place**: We collected Gasable’s documents (PDF/DOCX/TXT), key web pages, and research, then indexed them into a searchable knowledge base.
+- **Understands Arabic + English**: High‑quality PDF extraction (Arabic included) with OCR fallback for scans.
+- **Answers like a consultant**: The chatbot retrieves the most relevant evidence and answers with a clear structure: customer needs, supporting facts, and recommended next steps.
+- **Works from anywhere**: A serverless UI (Netlify) and API endpoints let you use the hub from the web and integrate it into your own apps.
+
+In short: it’s a robust, bilingual knowledge hub that helps you find facts fast, justify decisions, and move to action.
 
 ## Quick Start
 
@@ -69,6 +75,26 @@ server {
 ```
 Enable TLS via your proxy (e.g., Certbot/Let’s Encrypt).
 
+### Serverless (Netlify) deployment – UI + API Functions
+- This repo includes a Netlify static frontend and Netlify Functions API for a fully serverless setup.
+- Files:
+  - `index.html`, `dashboard.html` – static UI pages
+  - `netlify/functions/api.py` – serverless API (BM25 search, status, db stats)
+  - `netlify.toml` – routes `/api/*` to the Netlify Function
+
+Set these Netlify environment variables (Site settings → Build & deploy → Environment):
+- `PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`, `PG_DBNAME`
+- Optional: `RAG_TOP_K`
+
+Deploy steps:
+1) Connect GitHub repo to Netlify (done)
+2) Ensure the env vars above are set
+3) Trigger a deploy. Your site serves UI at `/` and `/dashboard`, and the API at `/api/...` via Functions.
+
+Notes:
+- Netlify Functions here return a fast lexical (BM25) answer. Streaming and hybrid dense retrieval run in the full FastAPI backend (see below) or can be added later under function time limits.
+- Heavy ingestion should run via CLI or a dedicated backend service, not as Functions (due to runtime and memory limits).
+
 ## Ingestion
 
 ### Local files (PDF, DOCX, TXT)
@@ -91,6 +117,9 @@ curl -X POST http://127.0.0.1:8000/api/ingest_local \
   -H 'Content-Type: application/json' \
   -d '{"path":"/absolute/path"}'
 ```
+
+Serverless note:
+- The Netlify Functions API in this repo does not expose ingestion endpoints (by design, Functions have short timeouts). Use the local CLI above or deploy the full FastAPI backend for ingestion endpoints.
 
 ### Web ingestion
 - DuckDuckGo/search + sitemap crawl:
@@ -129,7 +158,15 @@ curl -X POST http://127.0.0.1:8000/api/ingest_drive \
 ```
 
 ## Querying (RAG)
-- Single-shot:
+- Single-shot (Serverless Functions default):
+```bash
+curl -X POST https://<your-netlify-site>.netlify.app/api/query \
+  -H 'Content-Type: application/json' \
+  -d '{"q": "Customer segments for diesel in F&B sector in KSA"}'
+```
+Response includes: `answer`, `answer_html`, `context_ids`.
+
+- Single-shot (Full FastAPI):
 ```bash
 curl -X POST http://127.0.0.1:8000/api/query \
   -H 'Content-Type: application/json' \
@@ -137,7 +174,7 @@ curl -X POST http://127.0.0.1:8000/api/query \
 ```
 Response includes: `answer`, `answer_html`, `trace`, and `context_ids`.
 
-- Streaming (SSE):
+- Streaming (SSE, Full FastAPI):
 ```bash
 curl -N "http://127.0.0.1:8000/api/query_stream?q=best%20pricing%20model%20for%20diesel%20delivery"
 ```
@@ -153,15 +190,20 @@ curl -N "http://127.0.0.1:8000/api/query_stream?q=best%20pricing%20model%20for%2
   - `GET /` – welcome
   - `GET /dashboard` – simple DB dashboard (counts, samples)
 
-- Health/Status
+- Serverless Functions (Netlify)
+  - `POST /api/query` – body: `{ "q": string }` (BM25 lexical answer)
+  - `GET  /api/status`
+  - `GET  /api/db_stats`
+
+- Health/Status (Full FastAPI)
   - `GET /api/status` – DB health and process IDs
   - `GET /api/db_stats` – counts for `gasable_index`, `embeddings`, `documents`
 
-- RAG
+- RAG (Full FastAPI)
   - `POST /api/query` – body: `{ "q": string }`
   - `GET  /api/query_stream` – query: `?q=...` (SSE)
 
-- Ingestion
+- Ingestion (Full FastAPI)
   - `POST /api/ingest_local` – `{ path }`
   - `POST /api/ingest_web` – `{ query, max_results?, allow_domains? }`
   - `POST /api/crawl_site` – `{ base, max_pages? }`
@@ -183,7 +225,20 @@ curl -N "http://127.0.0.1:8000/api/query_stream?q=best%20pricing%20model%20for%2
 
 ## Chatbot Integration
 
-- Browser (fetch) – ensure `CORS_ORIGINS` includes your domain or `*`:
+- Browser (Netlify Functions)
+```javascript
+async function ask(query) {
+  const res = await fetch('https://<your-site>.netlify.app/api/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query })
+  });
+  const data = await res.json();
+  return data.answer;
+}
+```
+
+- Browser (Full FastAPI; ensure `CORS_ORIGINS` includes your domain or `*`):
 ```javascript
 async function ask(query) {
   const res = await fetch('https://api.yourdomain.com/api/query', {
@@ -211,9 +266,10 @@ ev.onmessage = (e) => console.log(e.data);
 
 ## Deployment Notes
 
-- Bind to `0.0.0.0` and place behind Nginx/Caddy. Use HTTPS.
+- Netlify Functions mode (UI+API): set DB env vars on Netlify; ingestion should be done via CLI or the full API backend.
+- Full API backend: bind to `0.0.0.0` and place behind Nginx/Caddy; use HTTPS.
 - Set `CORS_ORIGINS` to your chatbot domain(s) for browser usage.
-- Secure DB: use a private network/VPC and a dedicated DB user with least privilege.
+- Secure DB: private network/VPC, least-privilege DB user.
 - Tune pgvector index: adjust `lists` and consider `ANALYZE public.gasable_index;` after large ingests.
 
 ## Troubleshooting
