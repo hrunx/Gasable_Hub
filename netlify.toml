@@ -5,7 +5,7 @@ functions = "netlify/functions"
 # Route API calls to Netlify Function
 [[redirects]]
 from = "/api/*"
-to = "/.netlify/functions/api/:splat"
+to = "/.netlify/functions/api.js/:splat"
 status = 200
 force = true
 
