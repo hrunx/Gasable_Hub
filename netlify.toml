@@ -1,11 +1,11 @@
 [build]
 publish = "."
+functions = "netlify/functions"
 
-# Proxy API calls from Netlify domain to your running API service
-# Set API_URL in Netlify env to your backend base, e.g. https://api.gasablehub.com
+# Route API calls to Netlify Function
 [[redirects]]
 from = "/api/*"
-to = "${API_URL}/:splat"
+to = "/.netlify/functions/api/:splat"
 status = 200
 force = true
 

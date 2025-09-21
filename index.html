@@ -50,35 +50,28 @@
     out.innerHTML += `<div class="user">${query}</div>`;
     q.value = '';
 
-    // Clear process panel and start streaming
+    // Non-streaming fallback using /api/query (Netlify Functions friendly)
     stream.innerHTML = '';
-    appendStream('Starting...', 'start');
-    const es = new EventSource(`${API_BASE}/query_stream?q=${encodeURIComponent(query)}`);
-    es.addEventListener('step', (evt) => {
-      try {
-        const data = JSON.parse(evt.data);
-        const label = data.step || 'step';
-        const info = Object.entries(data).filter(([k]) => k !== 'step').map(([k,v]) => `${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' ');
-        appendStream(`${label} ${info}`);
-      } catch {}
-    });
-    es.addEventListener('final', (evt) => {
-      try {
-        const data = JSON.parse(evt.data);
-        if (data.error) {
-          out.innerHTML += `<div class="bot">${data.error}</div>`;
-        } else {
-          const html = data.answer_html || (data.answer ? data.answer.replace(/\n/g,'<br>') : 'No response');
-          out.innerHTML += `<div class="bot">${html}</div>`;
-        }
-      } catch (e) {
-        out.innerHTML += `<div class="bot">${String(e)}</div>`;
-      } finally {
-        es.close();
-        out.scrollTop = out.scrollHeight;
+    appendStream('Retrieving...', 'start');
+    try {
+      const res = await fetch(`${API_BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: query })
+      });
+      const data = await res.json();
+      if (data.error) {
+        appendStream(`error ${data.error}`, 'error');
+        out.innerHTML += `<div class="bot">${data.error}</div>`;
+      } else {
+        const html = data.answer_html || (data.answer ? data.answer.replace(/\n/g,'<br>') : 'No response');
+        out.innerHTML += `<div class="bot">${html}</div>`;
+        appendStream('done');
       }
-    });
-    es.onerror = () => { appendStream('stream error', 'error'); es.close(); };
+    } catch (e) {
+      appendStream(String(e), 'error');
+      out.innerHTML += `<div class="bot">${String(e)}</div>`;
+    }
   });
   </script>
   <style>
