@@ -129,8 +129,9 @@ exports.handler = async (event, context) => {
       `, [like, offset, limit]);
       const entries = r.rows.map(row => {
         const emb = row.embedding_text || '';
-        if (!full && emb) return { node_id: row.node_id, text: row.coalesce, embedding_preview: emb.slice(0, 256), embedding_dim: null };
-        return { node_id: row.node_id, text: row.coalesce, embedding: emb };
+        const text = row.coalesce || row.text || '';
+        if (!full && emb) return { node_id: row.node_id, text, embedding_preview: emb.slice(0, 256), embedding_dim: null };
+        return { node_id: row.node_id, text, embedding: emb };
       });
       return json(200, { entries });
     }
