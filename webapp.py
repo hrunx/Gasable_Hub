@@ -55,6 +55,11 @@ app.add_middleware(
 
 
 def get_pg_conn():
+	# Prefer full DSN if provided (e.g., Neon / Netlify)
+	dsn = os.getenv("DATABASE_URL") or os.getenv("NETLIFY_DATABASE_URL")
+	if dsn:
+		return psycopg2.connect(dsn)
+	# Fallback to discrete params
 	return psycopg2.connect(
 		host=os.getenv("PG_HOST", "localhost"),
 		port=int(os.getenv("PG_PORT", "5432")),

@@ -6,6 +6,11 @@ from rank_bm25 import BM25Okapi
 from urllib.parse import urlparse, unquote
 
 def _pg():
+    # Prefer a full DSN if provided (Neon/Netlify style)
+    dsn = os.getenv("DATABASE_URL") or os.getenv("NETLIFY_DATABASE_URL")
+    if dsn:
+        return psycopg2.connect(dsn)
+    # Fallback to discrete params
     return psycopg2.connect(
         host=os.getenv("PG_HOST", "localhost"),
         port=int(os.getenv("PG_PORT", "5432")),
