@@ -5,9 +5,15 @@ import type { Handler } from "@netlify/functions";
 import OpenAI from "openai";
 import { Client } from "pg";
 
+type PgClient = {
+  connect(): Promise<void>;
+  query: (text: string, params?: any[]) => Promise<{ rows: any[] }>;
+  end: () => Promise<void>;
+};
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-let pgClient: Client | null = null;
+let pgClient: PgClient | null = null;
 function extractProjectRef(): string {
   const supaUrl = process.env.SUPABASE_URL || "";
   const m1 = supaUrl.match(/https?:\/\/([^.]+)\.supabase\.co/i);
@@ -34,7 +40,7 @@ function poolerCandidates(base: string): string[] {
   }
 }
 
-async function getPg(): Promise<Client> {
+async function getPg(): Promise<PgClient> {
   if (pgClient) return pgClient;
   const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL as string;
   const tryConnect = async (conn: string) => {

@@ -1,6 +1,12 @@
 /* Streaming RAG with SSE: expansions → dense + lexical → RRF fusion → MMR → final */
 import OpenAI from "openai";
 import { Client } from "pg";
+
+type PgClient = {
+  connect(): Promise<void>;
+  query: (text: string, params?: any[]) => Promise<{ rows: any[] }>;
+  end: () => Promise<void>;
+};
 // Avoid pgvector import issues by passing vector text directly
 
 // Relax TLS on Netlify to avoid self-signed chain errors
@@ -51,7 +57,7 @@ function poolerCandidates(base: string): string[] {
   }
 }
 
-async function getPg(): Promise<Client> {
+async function getPg(): Promise<PgClient> {
   const primary = withNoVerify(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "");
   const tryConnect = async (conn: string) => {
     const c = new Client({ connectionString: conn, ssl: { rejectUnauthorized: false } });

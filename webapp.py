@@ -71,7 +71,7 @@ def get_pg_conn():
 
 def embed_query(q: str) -> list[float]:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=q)
+	resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=q)
 	return resp.data[0].embedding
 
 
@@ -88,7 +88,7 @@ def upsert_embeddings(docs: list[dict]) -> int:
 				api_key = os.getenv("OPENAI_API_KEY")
 				if api_key:
 					try:
-emb_resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=text)
+						emb_resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=text)
 						vec = emb_resp.data[0].embedding
 						vec_str = "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
 						cur.execute(
@@ -324,7 +324,7 @@ def _bm25_search(query: str, k: int = 10) -> list[tuple[str, str, float]]:
 
 def embed_queries(queries: list[str]) -> list[list[float]]:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=queries)
+	resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=queries)
 	# Preserve order
 	return [d.embedding for d in resp.data]
 
