@@ -199,14 +199,30 @@ exports.handler = async (event, context) => {
       try { body = JSON.parse(event.body || '{}'); } catch (_) {}
       const q = (body.q || '').trim();
       if (!q) return json(400, { error: 'Empty query' });
-      const pat = `%${q}%`;
-      const r = await db.query(`
-        SELECT node_id, left(text, 2000) AS text
+
+      // token-based lexical scoring
+      const tokens = q.split(/\s+/).map(t => t.trim()).filter(t => t.length >= 2).slice(0, 8);
+      const ilikes = tokens.map((_, i) => `CASE WHEN text ILIKE $${i + 1} THEN 1 ELSE 0 END`).join(' + ') || '0';
+      const params = tokens.map(t => `%${t}%`);
+
+      let sql = `
+        SELECT node_id, left(text, 2000) AS text, (${ilikes}) AS score
         FROM public.gasable_index
-        WHERE text ILIKE $1
-        ORDER BY length(text) DESC
-        LIMIT 6
-      `, [pat]);
+        ${tokens.length ? '' : ''}
+        ORDER BY score DESC, length(text) DESC
+        LIMIT 8
+      `;
+      let r = await db.query(sql, params);
+      if (r.rows.length === 0) {
+        // fallback to trigram similarity on full query
+        r = await db.query(`
+          SELECT node_id, left(text, 2000) AS text
+          FROM public.gasable_index
+          WHERE text % $1
+          ORDER BY similarity(text, $1) DESC
+          LIMIT 8
+        `, [q]);
+      }
       const answer = r.rows.map(x => x.text).join('\n\n');
       return json(200, { answer, answer_html: answer.replace(/\n/g, '<br>'), context_ids: r.rows.map(x => x.node_id) });
     }
