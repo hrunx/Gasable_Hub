@@ -1,3 +1,12 @@
+node_modules/
+*.log
+logs/
+.DS_Store
+# ignore large artifacts
+/gasable_index.json
+# Netlify
+.netlify/
+# Python venv
 .venv/
 __pycache__/
 *.pyc

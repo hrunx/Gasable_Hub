@@ -9,7 +9,7 @@ external_node_modules = ["openai", "pg", "pgvector"]
 # Route API calls to Netlify Function
 [[redirects]]
 from = "/api/*"
-to = "/.netlify/functions/:splat"
+to = "/.netlify/functions/api/:splat"
 status = 200
 force = true
 
