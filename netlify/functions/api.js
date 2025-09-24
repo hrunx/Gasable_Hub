@@ -1,4 +1,4 @@
-const { Pool } = require('pg');
+const { Client } = require('pg');
 
 function extractProjectRef() {
   const supaUrl = process.env.SUPABASE_URL || '';
@@ -22,23 +22,22 @@ function buildPoolerConnStr(baseConnStr) {
   return regions.map(r => `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@aws-0-${r}.pooler.supabase.com:6543/postgres?sslmode=require&options=project%3D${project}`);
 }
 
-async function getPool() {
+async function getClient() {
   const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL;
   if (!primary) throw new Error('DATABASE_URL/NETLIFY_DATABASE_URL not set');
   const tryConn = async (connStr) => {
-    const p = new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
-    // quick test
-    await p.query('SELECT 1');
-    return p;
+    const c = new Client({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
+    await c.connect();
+    await c.query('SELECT 1');
+    return c;
   };
   try {
     return await tryConn(primary);
   } catch (e) {
     const msg = String(e || '');
     if (!/ENOTFOUND|EAI_AGAIN/i.test(msg)) throw e;
-    // fallback to pooler across common regions
     for (const alt of buildPoolerConnStr(primary)) {
-      try { return await tryConn(alt); } catch (_) { /* try next */ }
+      try { return await tryConn(alt); } catch (_) {}
     }
     throw e;
   }
@@ -52,7 +51,6 @@ exports.handler = async (event, context) => {
   const rawPath = event.path || '';
   const path = (() => {
     let p = rawPath;
-    // Normalize both direct function calls and redirected /api/* calls
     if (p.startsWith('/.netlify/functions/api')) p = p.slice('/.netlify/functions/api'.length);
     if (p.startsWith('/api')) p = p.slice('/api'.length);
     if (!p.startsWith('/')) p = '/' + p;
@@ -61,12 +59,12 @@ exports.handler = async (event, context) => {
   })();
   const method = event.httpMethod || 'GET';
   const qs = event.queryStringParameters || {};
-  const pool = await getPool();
+  const db = await getClient();
 
   try {
     if (path === '/status') {
       try {
-        await pool.query('SELECT 1');
+        await db.query('SELECT 1');
         return json(200, { db: { status: 'ok' } });
       } catch (e) {
         return json(200, { db: { status: 'error', error: String(e) } });
@@ -74,9 +72,9 @@ exports.handler = async (event, context) => {
     }
 
     if (path === '/db_stats') {
-      const r1 = await pool.query('SELECT COUNT(*)::int AS c FROM public.gasable_index');
-      const r2 = await pool.query('SELECT COUNT(*)::int AS c FROM public.embeddings');
-      const r3 = await pool.query('SELECT COUNT(*)::int AS c FROM public.documents');
+      const r1 = await db.query('SELECT COUNT(*)::int AS c FROM public.gasable_index');
+      const r2 = await db.query('SELECT COUNT(*)::int AS c FROM public.embeddings');
+      const r3 = await db.query('SELECT COUNT(*)::int AS c FROM public.documents');
       return json(200, { gasable_index: r1.rows[0].c, embeddings: r2.rows[0].c, documents: r3.rows[0].c });
     }
 
@@ -85,12 +83,12 @@ exports.handler = async (event, context) => {
     }
 
     if (path === '/db/schemas') {
-      const r = await pool.query("SELECT nspname AS schema FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' ORDER BY 1");
+      const r = await db.query("SELECT nspname AS schema FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' ORDER BY 1");
       return json(200, { schemas: r.rows.map(r => r.schema) });
     }
 
     if (path === '/db/tables') {
-      const r = await pool.query(`
+      const r = await db.query(`
         SELECT n.nspname AS schema, c.relname AS table,
                COALESCE(s.n_live_tup, 0)::bigint AS est_rows,
                pg_total_relation_size(c.oid)::bigint AS total_bytes
@@ -100,11 +98,10 @@ exports.handler = async (event, context) => {
         WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
         ORDER BY n.nspname, c.relname
       `);
-      // Optionally compute exact counts for small tables
       const tables = r.rows;
       for (const t of tables) {
         try {
-          const rr = await pool.query(`SELECT COUNT(*)::bigint AS c FROM ${t.schema}.${t.table}`);
+          const rr = await db.query(`SELECT COUNT(*)::bigint AS c FROM ${t.schema}.${t.table}`);
           t.exact_rows = Number(rr.rows[0].c);
         } catch (_) {}
       }
@@ -115,13 +112,13 @@ exports.handler = async (event, context) => {
       const parts = path.split('/');
       const schema = decodeURIComponent(parts[3]);
       const table = decodeURIComponent(parts[4]);
-      const cols = await pool.query(`
+      const cols = await db.query(`
         SELECT column_name, data_type, is_nullable, ordinal_position
         FROM information_schema.columns
         WHERE table_schema = $1 AND table_name = $2
         ORDER BY ordinal_position
       `, [schema, table]);
-      const idx = await pool.query(`
+      const idx = await db.query(`
         SELECT indexname, indexdef FROM pg_indexes
         WHERE schemaname = $1 AND tablename = $2
         ORDER BY 1
@@ -133,7 +130,7 @@ exports.handler = async (event, context) => {
       const parts = path.split('/');
       const schema = decodeURIComponent(parts[3]);
       const table = decodeURIComponent(parts[4]);
-      const r = await pool.query(`SELECT COUNT(*)::bigint AS c FROM ${schema}.${table}`);
+      const r = await db.query(`SELECT COUNT(*)::bigint AS c FROM ${schema}.${table}`);
       return json(200, { count: Number(r.rows[0].c) });
     }
 
@@ -143,12 +140,12 @@ exports.handler = async (event, context) => {
       const table = decodeURIComponent(parts[4]);
       const limit = Math.max(1, Math.min(parseInt(qs.limit || '50', 10), 2000));
       const offset = Math.max(0, parseInt(qs.offset || '0', 10));
-      const r = await pool.query(`SELECT * FROM ${schema}.${table} OFFSET $1 LIMIT $2`, [offset, limit]);
+      const r = await db.query(`SELECT * FROM ${schema}.${table} OFFSET $1 LIMIT $2`, [offset, limit]);
       return json(200, { columns: r.fields.map(f => f.name), rows: r.rows.map(row => Object.values(row)) });
     }
 
     if (path === '/processed_files') {
-      const r = await pool.query(`
+      const r = await db.query(`
         SELECT CASE WHEN position('#' in node_id) > 0 THEN left(node_id, position('#' in node_id)-1) ELSE node_id END AS file,
                COUNT(*)::bigint AS cnt
         FROM public.gasable_index
@@ -166,7 +163,7 @@ exports.handler = async (event, context) => {
       const full = parseInt(qs.full || '0', 10);
       if (!file) return json(200, { entries: [] });
       const like = file + '#%';
-      const r = await pool.query(`
+      const r = await db.query(`
         SELECT node_id, COALESCE(text,''), CASE WHEN embedding IS NULL THEN NULL ELSE embedding::text END AS embedding_text
         FROM public.gasable_index
         WHERE node_id LIKE $1
@@ -188,7 +185,7 @@ exports.handler = async (event, context) => {
       const q = (body.q || '').trim();
       if (!q) return json(400, { error: 'Empty query' });
       const pat = `%${q}%`;
-      const r = await pool.query(`
+      const r = await db.query(`
         SELECT node_id, left(text, 2000) AS text
         FROM public.gasable_index
         WHERE text ILIKE $1
@@ -203,7 +200,7 @@ exports.handler = async (event, context) => {
   } catch (e) {
     return json(500, { error: String(e) });
   } finally {
-    // let Netlify reuse connections
+    try { await db.end(); } catch (_) {}
   }
 };
 
