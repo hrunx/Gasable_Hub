@@ -135,7 +135,7 @@ export const handler: Handler = async (event) => {
 
     const context = hits.map((h, i) => `[${i + 1}] ${h.text}`).join("\n\n");
     const messages = [
-      { role: "system", content: "Answer in the user's language concisely. Use markdown. When listing items, use bullet points. Cite sources with [1], [2] referring to the bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
+      { role: "system", content: "Be informative but succinct. Use markdown. Begin with a short heading when appropriate, then provide 5–10 clear bullet points with brief clarifications. Cite sources with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
       { role: "user", content: `Question: ${q}\n\nContext:\n${context}` }
     ] as any;
     const comp = await openai.chat.completions.create({

@@ -200,7 +200,7 @@ export default async (req: Request): Promise<Response> => {
             if (da !== db) return db - da;
             return 0;
           });
-        const selected = simpleMMR(cands, 5, 0.75);
+        const selected = simpleMMR(cands, 8, 0.75);
         sse(controller, "step", { step: "selected_context", count: selected.length });
 
         const context = selected.map((s, i) => `[${i + 1}] ${s.text}`).join("\n\n");
@@ -218,7 +218,7 @@ export default async (req: Request): Promise<Response> => {
           const comp = await openai.chat.completions.create({
             model: ANSWER_MODEL,
             messages: [
-              { role: "system", content: "Answer in the user's language concisely. Use markdown. When listing items, use bullet points. Cite sources with [1], [2] referring to the bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
+              { role: "system", content: "Be informative but succinct. Use markdown. Begin with a short heading when appropriate (e.g., 'Gasable’s services'), then provide 5–10 clear bullet points with brief clarifications. Cite sources with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
               { role: "user", content: `Question: ${q}\n\nContext:\n${context}` }
             ]
           });
