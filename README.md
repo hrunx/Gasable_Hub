@@ -79,12 +79,23 @@ Enable TLS via your proxy (e.g., Certbot/Let’s Encrypt).
 - This repo includes a Netlify static frontend and Netlify Functions API for a fully serverless setup.
 - Files:
   - `index.html`, `dashboard.html` – static UI pages
-  - `netlify/functions/api.py` – serverless API (BM25 search, status, db stats)
-  - `netlify.toml` – routes `/api/*` to the Netlify Function
+  - `netlify/functions/api.js` – serverless API (BM25/lexical answer, status, DB stats)
+  - `netlify/functions/query.ts` – vector RAG (embeds with OpenAI → pgvector search → optional LLM answer)
+  - `netlify/functions/query_stream.ts` – streaming hybrid RAG (SSE)
+  - `netlify/functions/health.ts` – health check
+  - `netlify.toml` – routes `/api/*` → `functions/api`
 
 Set these Netlify environment variables (Site settings → Build & deploy → Environment):
-- `PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`, `PG_DBNAME`
-- Optional: `RAG_TOP_K`
+- Core
+  - `OPENAI_API_KEY`
+  - `DATABASE_URL` (or `SUPABASE_DB_URL`) – pooled Postgres with pgvector (sslmode required)
+- Vector search / table config
+  - `EMBED_MODEL` (default `text-embedding-3-large`)
+  - `EMBED_DIM` (default `3072`)
+  - `PG_SCHEMA` (default `public`)
+  - `PG_TABLE` (default `gasable_index`)
+- Answer model
+  - `RERANK_MODEL` or `OPENAI_MODEL` (default `gpt-5-mini`; `gpt-4o-mini` also works)
 
 Deploy steps:
 1) Connect GitHub repo to Netlify (done)
@@ -92,23 +103,75 @@ Deploy steps:
 3) Trigger a deploy. Your site serves UI at `/` and `/dashboard`, and the API at `/api/...` via Functions.
 
 Notes:
-- Netlify Functions here return a fast lexical (BM25) answer. Streaming and hybrid dense retrieval run in the full FastAPI backend (see below) or can be added later under function time limits.
-- Heavy ingestion should run via CLI or a dedicated backend service, not as Functions (due to runtime and memory limits).
+- Lexical BM25 answer is served via `POST /api/query` (through `functions/api.js`) and is sanitized (HTML/Markdown images/links stripped).
+- Vector+LLM single-shot is served via `POST /.netlify/functions/query`.
+- Streaming hybrid RAG (expansions → dense + lexical → RRF → MMR) is served via `GET /.netlify/functions/query_stream?q=...`.
+- The streaming selector prioritizes `gasable.com` content when available and now selects up to 8 context chunks.
+- Heavy ingestion should run via CLI or the full FastAPI backend (Functions have short timeouts).
 
-### Serverless (Netlify Functions, TypeScript) – Neon pgvector RAG API
-- This repo exposes `POST /api/query` implemented in Netlify Functions (TypeScript) hitting Neon pgvector directly.
-- Files:
-  - `netlify/functions/query.ts` – embeds query (OpenAI), searches pgvector on Neon, returns hits + optional answer
-  - `netlify/functions/health.ts` – simple health check
-  - `netlify/functions/api.js` – legacy dashboard endpoints
-  - `netlify.toml` – routes `/api/query` → `functions/query`
-- Netlify env vars:
-  - `DATABASE_URL` – Neon pooled URL (sslmode=require)
-  - `OPENAI_API_KEY`
-  - `EMBED_MODEL` default `text-embedding-3-large`
-  - `EMBED_DIM` default `3072` (match your index time)
-  - `PG_SCHEMA` default `public`, `PG_TABLE` default `gasable_index`
-  - `RERANK_MODEL` default `gpt-5-mini` (or `gpt-4o-mini`)
+### Serverless (Netlify Functions, TypeScript) – pgvector RAG API
+- Endpoints:
+  - `POST /.netlify/functions/query` – vector search (OpenAI embeddings → pgvector) with optional concise LLM answer.
+  - `GET  /.netlify/functions/query_stream?q=...` – streaming hybrid RAG over SSE.
+  - `POST /api/query` – fast lexical BM25 answer via `functions/api.js`.
+- Behavior highlights:
+  - Answers are formatted in Markdown with concise bullets; sanitization removes noisy HTML/MD artifacts.
+  - Some small models only support default temperature; we omit `temperature` in Functions to avoid model errors.
+  - Streaming uses up to 8 diverse context chunks and boosts `gasable.com` when present.
+  - For vector search, `k` can be passed in the JSON body (default 12).
+
+#### cURL examples
+```bash
+# Lexical (sanitized)
+curl -s -X POST https://<site>.netlify.app/api/query -H 'Content-Type: application/json' -d '{"q":"What are Gasable services?"}'
+
+# Vector + LLM (single-shot)
+curl -s -X POST https://<site>.netlify.app/.netlify/functions/query -H 'Content-Type: application/json' -d '{"q":"What are Gasable services?","k":12,"withAnswer":true}'
+
+# Streaming hybrid (SSE)
+curl -N "https://<site>.netlify.app/.netlify/functions/query_stream?q=What%20are%20Gasable%20services"
+```
+
+---
+
+## Configuration: Retrieval and RAG Settings
+
+This project exposes several knobs via environment variables. Defaults are chosen for quality/latency balance.
+
+### Global/OpenAI
+- `OPENAI_API_KEY` – required for embeddings and LLM answers
+- `OPENAI_EMBED_MODEL` / `EMBED_MODEL` – default `text-embedding-3-large`
+- `OPENAI_MODEL` / `RERANK_MODEL` – default `gpt-5-mini` (you can use `gpt-4o-mini`)
+
+### Database (Postgres + pgvector)
+- `DATABASE_URL` (or `SUPABASE_DB_URL`) – pooled URL with SSL
+- `PG_SCHEMA` – default `public`
+- `PG_TABLE` – default `gasable_index`
+- `EMBED_DIM` – default `3072` (must match the dimension used at ingestion)
+
+### FastAPI (full backend) – Retrieval knobs
+- `RAG_TOP_K` – final context chunks to answer with (default 6)
+- `RAG_K_DENSE_EACH` – vector hits per table before fusion (default 8)
+- `RAG_K_DENSE_FUSE` – cap fused dense candidates (default 10)
+- `RAG_K_LEX` – BM25 candidates per query expansion (default 12)
+- `RAG_CORPUS_LIMIT` – rows per table used to build BM25 cache (default 1200)
+- `RAG_MMR_LAMBDA` – diversity vs relevance tradeoff (default 0.7)
+- `RAG_EXPANSIONS` – max generated query expansions (default 2)
+- `RAG_BM25_TTL_SEC` – BM25 cache TTL seconds (default 300)
+
+### Netlify Functions – Retrieval knobs
+- Vector single-shot (`functions/query.ts`):
+  - Request body: `{ q: string, k?: number, withAnswer?: boolean }` (k defaults to 12)
+  - Env: `EMBED_MODEL`, `EMBED_DIM`, `PG_SCHEMA`, `PG_TABLE`, `OPENAI_MODEL`/`RERANK_MODEL`
+- Streaming hybrid (`functions/query_stream.ts`):
+  - SSE endpoint. Internally selects up to 8 context chunks (constant). Prioritizes `gasable.com` when available.
+  - Env: same as vector (embeddings + DB). No temperature passed (model default).
+
+### Ingestion / Indexing
+- `CHUNK_CHARS` – chunk size for ingestion (default 4000)
+- Use CLI or FastAPI ingestion endpoints; Netlify Functions are not used for long-running ingestion.
+
+---
 
 ## Ingestion
 
