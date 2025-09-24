@@ -6,13 +6,51 @@ import { Vector } from "pgvector/pg";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 let pgClient: Client | null = null;
-async function getPg(): Promise<Client> {
-  if (!pgClient) {
-    const connStr = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
-    pgClient = new Client({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
-    await pgClient.connect();
+function extractProjectRef(): string {
+  const supaUrl = process.env.SUPABASE_URL || "";
+  const m1 = supaUrl.match(/https?:\/\/([^.]+)\.supabase\.co/i);
+  if (m1) return m1[1];
+  const raw = (process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "");
+  const m2 = raw.match(/@db\.([^.]+)\.supabase\.co/i);
+  if (m2) return m2[1];
+  return "";
+}
+
+function poolerCandidates(base: string): string[] {
+  try {
+    const url = new URL(base.replace("postgres://", "postgresql://"));
+    const username = decodeURIComponent(url.username || "postgres");
+    const password = decodeURIComponent(url.password || "");
+    const project = extractProjectRef();
+    const regions = [
+      "us-east-1","us-east-2","us-west-2","eu-central-1","eu-west-1","eu-west-2","eu-north-1",
+      "ap-south-1","ap-southeast-1","ap-southeast-2","ap-northeast-1","sa-east-1"
+    ];
+    return regions.map(r => `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@aws-0-${r}.pooler.supabase.com:6543/postgres?sslmode=require&options=project%3D${project}`);
+  } catch {
+    return [];
   }
-  return pgClient;
+}
+
+async function getPg(): Promise<Client> {
+  if (pgClient) return pgClient;
+  const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL as string;
+  const tryConnect = async (conn: string) => {
+    const c = new Client({ connectionString: conn, ssl: { rejectUnauthorized: false } });
+    await c.connect();
+    await c.query("SELECT 1");
+    return c;
+  };
+  try {
+    pgClient = await tryConnect(primary);
+  } catch (e: any) {
+    if (!/ENOTFOUND|EAI_AGAIN/i.test(String(e))) throw e;
+    for (const alt of poolerCandidates(primary)) {
+      try { pgClient = await tryConnect(alt); break; } catch(_) {}
+    }
+    if (!pgClient) throw e;
+  }
+  return pgClient!;
 }
 
 const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-large";

@@ -1,9 +1,47 @@
 const { Pool } = require('pg');
 
-function getPool() {
-  const connStr = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL;
-  if (!connStr) throw new Error('DATABASE_URL/NETLIFY_DATABASE_URL not set');
-  return new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
+function extractProjectRef() {
+  const supaUrl = process.env.SUPABASE_URL || '';
+  const m1 = supaUrl.match(/https?:\/\/([^.]+)\.supabase\.co/i);
+  if (m1) return m1[1];
+  const raw = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL || '';
+  const m2 = raw.match(/@db\.([^.]+)\.supabase\.co/i);
+  if (m2) return m2[1];
+  return '';
+}
+
+function buildPoolerConnStr(baseConnStr) {
+  const url = new URL(baseConnStr.replace('postgres://', 'postgresql://'));
+  const username = decodeURIComponent(url.username || 'postgres');
+  const password = decodeURIComponent(url.password || '');
+  const project = extractProjectRef();
+  const regions = [
+    'us-east-1','us-east-2','us-west-2','eu-central-1','eu-west-1','eu-west-2','eu-north-1',
+    'ap-south-1','ap-southeast-1','ap-southeast-2','ap-northeast-1','sa-east-1'
+  ];
+  return regions.map(r => `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@aws-0-${r}.pooler.supabase.com:6543/postgres?sslmode=require&options=project%3D${project}`);
+}
+
+async function getPool() {
+  const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL;
+  if (!primary) throw new Error('DATABASE_URL/NETLIFY_DATABASE_URL not set');
+  const tryConn = async (connStr) => {
+    const p = new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
+    // quick test
+    await p.query('SELECT 1');
+    return p;
+  };
+  try {
+    return await tryConn(primary);
+  } catch (e) {
+    const msg = String(e || '');
+    if (!/ENOTFOUND|EAI_AGAIN/i.test(msg)) throw e;
+    // fallback to pooler across common regions
+    for (const alt of buildPoolerConnStr(primary)) {
+      try { return await tryConn(alt); } catch (_) { /* try next */ }
+    }
+    throw e;
+  }
 }
 
 function json(code, obj) {
