@@ -24,7 +24,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS public.gasable_index (
   node_id TEXT PRIMARY KEY,
   text TEXT,
-  embedding vector(1536), -- OpenAI text-embedding-3-small
+  embedding vector(3072), -- OpenAI text-embedding-3-large
   li_metadata JSONB DEFAULT '{}'::jsonb
 );
 CREATE INDEX IF NOT EXISTS gasable_index_embedding_ivfflat
@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS gasable_index_embedding_ivfflat
 ```
 Key environment variables:
 - `OPENAI_API_KEY`: for embeddings and answers
-- `OPENAI_EMBED_MODEL` (default `text-embedding-3-small`)
+- `OPENAI_EMBED_MODEL` (default `text-embedding-3-large`)
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`, `PG_DBNAME`
 - `CORS_ORIGINS` (comma-separated list or `*`)

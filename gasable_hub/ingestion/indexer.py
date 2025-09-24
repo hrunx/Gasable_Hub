@@ -8,7 +8,7 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.postgres import PGVectorStore
 
 
-def build_vector_store(table_name: str = "gasable_index", embed_dim: int = 1536) -> PGVectorStore:
+def build_vector_store(table_name: str = "gasable_index", embed_dim: int = 3072) -> PGVectorStore:
 	return PGVectorStore.from_params(
 		database=os.getenv("PG_DBNAME", "gasable_db"),
 		host=os.getenv("PG_HOST", "localhost"),
@@ -20,7 +20,7 @@ def build_vector_store(table_name: str = "gasable_index", embed_dim: int = 1536)
 	)
 
 
-def index_documents(docs: Sequence[dict], table_name: str = "gasable_index", embed_model_name: str = "text-embedding-3-small") -> None:
+def index_documents(docs: Sequence[dict], table_name: str = "gasable_index", embed_model_name: str = "text-embedding-3-large") -> None:
 	embed_model = OpenAIEmbedding(model=embed_model_name)
 	vector_store = build_vector_store(table_name=table_name, embed_dim=1536)
 	storage_ctx = StorageContext.from_defaults(vector_store=vector_store)
