@@ -12,7 +12,15 @@ function json(code, obj) {
 
 exports.handler = async (event, context) => {
   const rawPath = event.path || '';
-  const path = (rawPath.split('/.netlify/functions/api')[1] || '/').replace(/\/+/g, '/');
+  const path = (() => {
+    let p = rawPath;
+    // Normalize both direct function calls and redirected /api/* calls
+    if (p.startsWith('/.netlify/functions/api')) p = p.slice('/.netlify/functions/api'.length);
+    if (p.startsWith('/api')) p = p.slice('/api'.length);
+    if (!p.startsWith('/')) p = '/' + p;
+    p = p.replace(/\/+/g, '/');
+    return p || '/';
+  })();
   const method = event.httpMethod || 'GET';
   const qs = event.queryStringParameters || {};
   const pool = getPool();
