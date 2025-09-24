@@ -52,7 +52,8 @@
     // Clear process panel and start streaming
     stream.innerHTML = '';
     appendStream('Starting...', 'start');
-    const es = new EventSource(`/api/query_stream?q=${encodeURIComponent(query)}`);
+    const ssePath = (location.hostname.endsWith('netlify.app') ? '/.netlify/functions/query_stream' : '/api/query_stream');
+    const es = new EventSource(`${ssePath}?q=${encodeURIComponent(query)}`);
     es.addEventListener('step', (evt) => {
       try {
         const data = JSON.parse(evt.data);

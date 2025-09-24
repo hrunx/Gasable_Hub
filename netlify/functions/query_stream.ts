@@ -1,8 +1,7 @@
 /* Streaming RAG with SSE: expansions → dense + lexical → RRF fusion → MMR → final */
 import OpenAI from "openai";
 import { Client } from "pg";
-import pkg from "pgvector/pg";
-const { Vector } = pkg as any;
+// Avoid pgvector import issues by passing vector text directly
 
 // Relax TLS on Netlify to avoid self-signed chain errors
 (process as any).env.NODE_TLS_REJECT_UNAUTHORIZED = (process as any).env.NODE_TLS_REJECT_UNAUTHORIZED || "0";
@@ -153,11 +152,12 @@ export default async (req: Request): Promise<Response> => {
           try {
             const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: exp });
             const vec = emb.data[0].embedding as number[];
+            const vecText = `[${vec.map((x:number)=> (Number.isFinite(x)?x:0)).join(',')}]`;
             const { rows } = await pg.query(
               `SELECT node_id, text, 1 - (embedding <=> $1::vector) AS score
                FROM ${SCHEMA}.${TABLE}
                ORDER BY embedding <=> $1::vector
-               LIMIT 8`, [new Vector(vec)]
+               LIMIT 8`, [vecText]
             );
             denseLists.push(rows.map((r: any, i: number) => ({ id: r.node_id, score: Number(r.score) })));
             rows.forEach((r: any) => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });

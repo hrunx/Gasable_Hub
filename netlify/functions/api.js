@@ -102,13 +102,8 @@ exports.handler = async (event, context) => {
           input: { q: 'string' },
           output: { answer: 'string', context_ids: 'string[]', sources: 'string[]' }
         },
-        {
-          name: 'vector.query',
-          path: '/.netlify/functions/query',
-          method: 'POST',
-          input: { q: 'string', k: 'number', withAnswer: 'boolean' },
-          output: { hits: 'array', answer: 'string' }
-        },
+        { name: 'vector.query', path: '/.netlify/functions/query', method: 'POST' },
+        { name: 'vector.stream', path: '/.netlify/functions/query_stream?q=...', method: 'GET' },
         { name: 'db.status', path: '/api/status', method: 'GET' },
         { name: 'db.stats', path: '/api/db_stats', method: 'GET' },
         { name: 'db.schemas', path: '/api/db/schemas', method: 'GET' },

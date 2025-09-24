@@ -4,7 +4,6 @@
 import type { Handler } from "@netlify/functions";
 import OpenAI from "openai";
 import { Client } from "pg";
-import { Vector } from "pgvector/pg";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -103,7 +102,8 @@ export const handler: Handler = async (event) => {
       ORDER BY embedding <=> $1::vector
       LIMIT $2
     `;
-    const { rows } = await pg.query(sql, [new Vector(vec!), k]);
+    const vecText = `[${vec!.map((x:number)=> (Number.isFinite(x)?x:0)).join(",")}]`;
+    const { rows } = await pg.query(sql, [vecText, k]);
 
     const hits = rows.map((r: any) => ({
       id: r.node_id,
