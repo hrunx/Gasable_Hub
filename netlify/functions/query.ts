@@ -134,8 +134,7 @@ export const handler: Handler = async (event) => {
     ] as any;
     const comp = await openai.chat.completions.create({
       model: ANSWER_MODEL,
-      messages,
-      temperature: 0
+      messages
     });
 
     return {

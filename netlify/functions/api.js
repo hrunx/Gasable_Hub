@@ -268,7 +268,14 @@ exports.handler = async (event, context) => {
       const clean = (t) => {
         if (!t) return '';
         let s = String(t);
+        // Strip HTML
         s = s.replace(/<[^>]+>/g, ' ');
+        // Remove markdown images and links content noise
+        s = s.replace(/!\[[^\]]*\]\([^\)]*\)/g, ' ');
+        s = s.replace(/\[[^\]]*\]\([^\)]*\)/g, (m) => {
+          const text = (m.match(/^\[([^\]]*)\]/) || [,''])[1] || '';
+          return text;
+        });
         s = s.replace(/https:\s+/g, 'https://').replace(/http:\s+/g, 'http://');
         s = s.replace(/\s{2,}/g, ' ');
         s = s.replace(/\n{3,}/g, '\n\n');

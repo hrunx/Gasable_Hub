@@ -186,7 +186,14 @@ export default async (req: Request): Promise<Response> => {
         sse(controller, "step", { step: "fusion", candidates: fused.length });
 
         // Build candidate objects with text
-        const cands = fused.map(f => ({ id: f.id, score: f.score, text: (denseRows[f.id]?.text || "") as string }));
+        const cands = fused.map(f => ({ id: f.id, score: f.score, text: (denseRows[f.id]?.text || "") as string }))
+          .sort((a, b) => {
+            const da = a.id.startsWith("web://https://www.gasable.com") ? 1 : (a.id.startsWith("web://") ? 0.5 : 0);
+            const db = b.id.startsWith("web://https://www.gasable.com") ? 1 : (b.id.startsWith("web://") ? 0.5 : 0);
+            // Boost official domain, then other web, then file://
+            if (da !== db) return db - da;
+            return 0;
+          });
         const selected = simpleMMR(cands, 5, 0.75);
         sse(controller, "step", { step: "selected_context", count: selected.length });
 
@@ -207,8 +214,7 @@ export default async (req: Request): Promise<Response> => {
             messages: [
               { role: "system", content: "Answer in the user's language concisely. Use markdown. When listing items, use bullet points. Cite sources with [1], [2] referring to the bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
               { role: "user", content: `Question: ${q}\n\nContext:\n${context}` }
-            ],
-            temperature: 0
+            ]
           });
           answer = sanitize(comp.choices[0].message.content || "");
         } catch {
