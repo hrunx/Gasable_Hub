@@ -27,8 +27,8 @@ CREATE TABLE IF NOT EXISTS public.gasable_index (
   embedding vector(3072), -- OpenAI text-embedding-3-large
   li_metadata JSONB DEFAULT '{}'::jsonb
 );
-CREATE INDEX IF NOT EXISTS gasable_index_embedding_ivfflat
-  ON public.gasable_index USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS gasable_index_embedding_hnsw
+  ON public.gasable_index USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 ```
 - Configure environment (copy and edit):
 ```bash

@@ -41,8 +41,8 @@ CREATE TABLE public.gasable_index (
 );
 
 -- Indexes
-CREATE INDEX gasable_index_embedding_ivfflat
-  ON public.gasable_index USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX gasable_index_embedding_hnsw
+  ON public.gasable_index USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 CREATE INDEX idx_embeddings_hnsw
   ON public.embeddings USING hnsw (embedding vector_l2_ops);
 CREATE INDEX gasable_index_text_trgm
