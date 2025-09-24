@@ -1,3 +1,6 @@
+// Relax TLS in Netlify runtime to avoid self-signed chain errors
+(process as any).env.NODE_TLS_REJECT_UNAUTHORIZED = (process as any).env.NODE_TLS_REJECT_UNAUTHORIZED || "0";
+;(process as any).env.PGSSLMODE = (process as any).env.PGSSLMODE || "no-verify";
 import type { Handler } from "@netlify/functions";
 import OpenAI from "openai";
 import { Client } from "pg";
@@ -44,7 +47,7 @@ async function getPg(): Promise<Client> {
   try {
     pgClient = await tryConnect(primary);
   } catch (e: any) {
-    if (!/ENOTFOUND|EAI_AGAIN/i.test(String(e))) throw e;
+    if (!/ENOTFOUND|EAI_AGAIN|self-signed certificate/i.test(String(e))) throw e;
     for (const alt of poolerCandidates(primary)) {
       try { pgClient = await tryConnect(alt); break; } catch(_) {}
     }
