@@ -61,6 +61,16 @@ const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
 const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
 
+function sanitizeAnswer(text: string): string {
+  if (!text) return "";
+  let s = String(text);
+  s = s.replace(/<[^>]+>/g, " ");
+  s = s.replace(/https:\s+/g, "https://").replace(/http:\s+/g, "http://");
+  s = s.replace(/\s{2,}/g, " ");
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s.trim();
+}
+
 export const handler: Handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
@@ -86,7 +96,8 @@ export const handler: Handler = async (event) => {
       if (!withAnswer) {
         return { statusCode: 200, body: JSON.stringify({ query: q, hits: rows }) };
       }
-      const answer = rows.map((r: any) => r.text).join("\n\n");
+      const answerRaw = rows.map((r: any) => r.text).join("\n\n");
+      const answer = sanitizeAnswer(answerRaw);
       return { statusCode: 200, body: JSON.stringify({ query: q, hits: rows, answer }) };
     }
     if (vec.length !== EMBED_DIM) {
@@ -118,7 +129,7 @@ export const handler: Handler = async (event) => {
 
     const context = hits.map((h, i) => `[${i + 1}] ${h.text}`).join("\n\n");
     const messages = [
-      { role: "system", content: "Answer concisely and cite sources like [1], [2]. Use only the provided context." },
+      { role: "system", content: "Answer in the user's language concisely. Use markdown. When listing items, use bullet points. Cite sources with [1], [2] referring to the bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
       { role: "user", content: `Question: ${q}\n\nContext:\n${context}` }
     ] as any;
     const comp = await openai.chat.completions.create({
@@ -130,7 +141,7 @@ export const handler: Handler = async (event) => {
     return {
       statusCode: 200,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query: q, hits, answer: comp.choices[0].message.content })
+      body: JSON.stringify({ query: q, hits, answer: sanitizeAnswer(comp.choices[0].message.content || "") })
     };
   } catch (err: any) {
     console.error(err);

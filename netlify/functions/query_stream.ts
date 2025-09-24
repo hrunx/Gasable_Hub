@@ -191,19 +191,28 @@ export default async (req: Request): Promise<Response> => {
         sse(controller, "step", { step: "selected_context", count: selected.length });
 
         const context = selected.map((s, i) => `[${i + 1}] ${s.text}`).join("\n\n");
+        const sanitize = (text: string) => {
+          if (!text) return "";
+          let s = String(text);
+          s = s.replace(/<[^>]+>/g, " ");
+          s = s.replace(/https:\\s+/g, "https://").replace(/http:\\s+/g, "http://");
+          s = s.replace(/\\s{2,}/g, " ");
+          s = s.replace(/\\n{3,}/g, "\\n\\n");
+          return s.trim();
+        };
         let answer = "";
         try {
           const comp = await openai.chat.completions.create({
             model: ANSWER_MODEL,
             messages: [
-              { role: "system", content: "Answer concisely. Cite sources like [1], [2]." },
+              { role: "system", content: "Answer in the user's language concisely. Use markdown. When listing items, use bullet points. Cite sources with [1], [2] referring to the bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
               { role: "user", content: `Question: ${q}\n\nContext:\n${context}` }
             ],
             temperature: 0
           });
-          answer = comp.choices[0].message.content || "";
+          answer = sanitize(comp.choices[0].message.content || "");
         } catch {
-          answer = selected.map(s => s.text).join("\n\n");
+          answer = sanitize(selected.map(s => s.text).join("\n\n"));
         }
 
         const resBody = {
