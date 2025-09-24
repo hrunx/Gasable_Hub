@@ -199,22 +199,47 @@ exports.handler = async (event, context) => {
       try { body = JSON.parse(event.body || '{}'); } catch (_) {}
       const q = (body.q || '').trim();
       if (!q) return json(400, { error: 'Empty query' });
+      
+      // Prefer gasable.com web content first
+      const preferDomain = `web://%gasable.com%`;
 
       // token-based lexical scoring
       const tokens = q.split(/\s+/).map(t => t.trim()).filter(t => t.length >= 2).slice(0, 8);
       const ilikes = tokens.map((_, i) => `CASE WHEN text ILIKE $${i + 1} THEN 1 ELSE 0 END`).join(' + ') || '0';
       const params = tokens.map(t => `%${t}%`);
 
+      // 1) Domain-prioritized search
       let sql = `
         SELECT node_id, left(text, 2000) AS text, (${ilikes}) AS score
         FROM public.gasable_index
-        ${tokens.length ? '' : ''}
+        WHERE node_id LIKE $${params.length + 1}
         ORDER BY score DESC, length(text) DESC
         LIMIT 8
       `;
-      let r = await db.query(sql, params);
+      let r = await db.query(sql, [...params, preferDomain]);
+
+      // 2) If empty, general search
       if (r.rows.length === 0) {
-        // fallback to trigram similarity on full query
+        sql = `
+          SELECT node_id, left(text, 2000) AS text, (${ilikes}) AS score
+          FROM public.gasable_index
+          ORDER BY score DESC, length(text) DESC
+          LIMIT 8
+        `;
+        r = await db.query(sql, params);
+      }
+
+      // 3) If still empty, trigram fallback scoped to domain first
+      if (r.rows.length === 0) {
+        r = await db.query(`
+          SELECT node_id, left(text, 2000) AS text
+          FROM public.gasable_index
+          WHERE node_id LIKE $1 AND text % $2
+          ORDER BY similarity(text, $2) DESC
+          LIMIT 8
+        `, [preferDomain, q]);
+      }
+      if (r.rows.length === 0) {
         r = await db.query(`
           SELECT node_id, left(text, 2000) AS text
           FROM public.gasable_index
@@ -223,8 +248,22 @@ exports.handler = async (event, context) => {
           LIMIT 8
         `, [q]);
       }
-      const answer = r.rows.map(x => x.text).join('\n\n');
-      return json(200, { answer, answer_html: answer.replace(/\n/g, '<br>'), context_ids: r.rows.map(x => x.node_id) });
+
+      const clean = (t) => {
+        if (!t) return '';
+        let s = String(t);
+        s = s.replace(/<[^>]+>/g, ' ');
+        s = s.replace(/https:\s+/g, 'https://').replace(/http:\s+/g, 'http://');
+        s = s.replace(/\s{2,}/g, ' ');
+        s = s.replace(/\n{3,}/g, '\n\n');
+        return s.trim();
+      };
+      const answer = clean(r.rows.map(x => x.text).join('\n\n'));
+      const sources = r.rows.map(x => String(x.node_id || '')
+        .replace(/^web:\/\//, '')
+        .replace(/^file:\/\//, '')
+      );
+      return json(200, { answer, answer_html: answer.replace(/\n/g, '<br>'), context_ids: r.rows.map(x => x.node_id), sources });
     }
 
     return json(404, { error: 'not found' });
