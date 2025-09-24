@@ -1,7 +1,8 @@
 /* Streaming RAG with SSE: expansions → dense + lexical → RRF fusion → MMR → final */
 import OpenAI from "openai";
 import { Client } from "pg";
-import { Vector } from "pgvector/pg";
+import pkg from "pgvector/pg";
+const { Vector } = pkg as any;
 
 // Relax TLS on Netlify to avoid self-signed chain errors
 (process as any).env.NODE_TLS_REJECT_UNAUTHORIZED = (process as any).env.NODE_TLS_REJECT_UNAUTHORIZED || "0";
