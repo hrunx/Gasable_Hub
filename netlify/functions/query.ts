@@ -69,8 +69,27 @@ export const handler: Handler = async (event) => {
     if (!q) return { statusCode: 400, body: "Missing q" };
 
     // 1) Embed query
-    const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: q });
-    const vec = emb.data[0].embedding as number[];
+    let vec: number[] | null = null;
+    try {
+      const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: q });
+      vec = emb.data[0].embedding as number[];
+    } catch (e: any) {
+      // fallback to lexical only if embeddings fail
+      const pg = await getPg();
+      const pat = `%${q}%`;
+      const { rows } = await pg.query(
+        `SELECT node_id, left(text, 2000) AS text
+         FROM ${SCHEMA}.${TABLE}
+         WHERE text ILIKE $1
+         ORDER BY length(text) DESC
+         LIMIT $2`, [pat, k]
+      );
+      if (!withAnswer) {
+        return { statusCode: 200, body: JSON.stringify({ query: q, hits: rows }) };
+      }
+      const answer = rows.map((r: any) => r.text).join("\n\n");
+      return { statusCode: 200, body: JSON.stringify({ query: q, hits: rows, answer }) };
+    }
     if (vec.length !== EMBED_DIM) {
       console.warn(`Embedding dim mismatch: got ${vec.length}, expected ${EMBED_DIM}`);
     }
@@ -84,7 +103,7 @@ export const handler: Handler = async (event) => {
       ORDER BY embedding <=> $1::vector
       LIMIT $2
     `;
-    const { rows } = await pg.query(sql, [new Vector(vec), k]);
+    const { rows } = await pg.query(sql, [new Vector(vec!), k]);
 
     const hits = rows.map((r: any) => ({
       id: r.node_id,

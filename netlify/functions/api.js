@@ -94,7 +94,28 @@ exports.handler = async (event, context) => {
     }
 
     if (path === '/mcp_tools') {
-      return json(200, { tools: [] });
+      return json(200, { tools: [
+        {
+          name: 'lexical.query',
+          path: '/api/query',
+          method: 'POST',
+          input: { q: 'string' },
+          output: { answer: 'string', context_ids: 'string[]', sources: 'string[]' }
+        },
+        {
+          name: 'vector.query',
+          path: '/.netlify/functions/query',
+          method: 'POST',
+          input: { q: 'string', k: 'number', withAnswer: 'boolean' },
+          output: { hits: 'array', answer: 'string' }
+        },
+        { name: 'db.status', path: '/api/status', method: 'GET' },
+        { name: 'db.stats', path: '/api/db_stats', method: 'GET' },
+        { name: 'db.schemas', path: '/api/db/schemas', method: 'GET' },
+        { name: 'db.tables', path: '/api/db/tables', method: 'GET' },
+        { name: 'files.processed', path: '/api/processed_files', method: 'GET' },
+        { name: 'files.entries', path: '/api/file_entries?file=...', method: 'GET' }
+      ]});
     }
 
     if (path === '/db/schemas') {
