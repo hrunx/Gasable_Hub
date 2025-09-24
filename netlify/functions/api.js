@@ -1,3 +1,4 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED || '0';
 const { Client } = require('pg');
 
 function extractProjectRef() {
@@ -35,7 +36,7 @@ async function getClient() {
     return await tryConn(primary);
   } catch (e) {
     const msg = String(e || '');
-    if (!/ENOTFOUND|EAI_AGAIN/i.test(msg)) throw e;
+    if (!/ENOTFOUND|EAI_AGAIN|self-signed certificate/i.test(msg)) throw e;
     for (const alt of buildPoolerConnStr(primary)) {
       try { return await tryConn(alt); } catch (_) {}
     }
@@ -59,9 +60,11 @@ exports.handler = async (event, context) => {
   })();
   const method = event.httpMethod || 'GET';
   const qs = event.queryStringParameters || {};
-  const db = await getClient();
+  let db = null;
 
   try {
+    db = await getClient();
+
     if (path === '/status') {
       try {
         await db.query('SELECT 1');
@@ -200,7 +203,7 @@ exports.handler = async (event, context) => {
   } catch (e) {
     return json(500, { error: String(e) });
   } finally {
-    try { await db.end(); } catch (_) {}
+    try { if (db) await db.end(); } catch (_) {}
   }
 };
 
