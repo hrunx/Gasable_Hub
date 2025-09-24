@@ -1,13 +1,21 @@
 {
-  "name": "gasable_hub",
+  "name": "gasable-netlify-api",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Netlify serverless functions and static UI for Gasable Hub",
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "echo \"no build\""
+  },
   "dependencies": {
-    "pg": "^8.11.3"
+    "@netlify/functions": "^2.8.0",
+    "openai": "^4.57.0",
+    "pg": "^8.12.0",
+    "pgvector": "^0.1.7"
   }
 }
 

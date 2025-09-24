@@ -95,17 +95,20 @@ Notes:
 - Netlify Functions here return a fast lexical (BM25) answer. Streaming and hybrid dense retrieval run in the full FastAPI backend (see below) or can be added later under function time limits.
 - Heavy ingestion should run via CLI or a dedicated backend service, not as Functions (due to runtime and memory limits).
 
-### FastAPI on AWS Lambda (serverless API) + Netlify UI
-- We include an AWS Lambda wrapper for `webapp.py` using Mangum (ASGI → Lambda): see `lambda_function.py` and `serverless.yml`.
-- Deploy with Serverless Framework or AWS SAM. After deploy, set Netlify redirect to your API Gateway URL:
-```toml
-[[redirects]]
-from = "/api/*"
-to = "https://<api-id>.execute-api.<region>.amazonaws.com/:splat"
-status = 200
-force = true
-```
-- Env vars (in AWS): `DATABASE_URL` (Neon DSN), `OPENAI_API_KEY`, optional `CORS_ORIGINS`.
+### Serverless (Netlify Functions, TypeScript) – Neon pgvector RAG API
+- This repo exposes `POST /api/query` implemented in Netlify Functions (TypeScript) hitting Neon pgvector directly.
+- Files:
+  - `netlify/functions/query.ts` – embeds query (OpenAI), searches pgvector on Neon, returns hits + optional answer
+  - `netlify/functions/health.ts` – simple health check
+  - `netlify/functions/api.js` – legacy dashboard endpoints
+  - `netlify.toml` – routes `/api/query` → `functions/query`
+- Netlify env vars:
+  - `DATABASE_URL` – Neon pooled URL (sslmode=require)
+  - `OPENAI_API_KEY`
+  - `EMBED_MODEL` default `text-embedding-3-large`
+  - `EMBED_DIM` default `3072` (match your index time)
+  - `PG_SCHEMA` default `public`, `PG_TABLE` default `gasable_index`
+  - `RERANK_MODEL` default `gpt-5-mini` (or `gpt-4o-mini`)
 
 ## Ingestion
 
