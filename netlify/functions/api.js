@@ -61,7 +61,7 @@ exports.handler = async (event, context) => {
   })();
   const method = event.httpMethod || 'GET';
   const qs = event.queryStringParameters || {};
-  const pool = getPool();
+  const pool = await getPool();
 
   try {
     if (path === '/status') {
