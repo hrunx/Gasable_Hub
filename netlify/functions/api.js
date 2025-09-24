@@ -1,4 +1,5 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED || '0';
+process.env.PGSSLMODE = process.env.PGSSLMODE || 'no-verify';
 const { Client } = require('pg');
 
 function extractProjectRef() {
@@ -11,6 +12,16 @@ function extractProjectRef() {
   return '';
 }
 
+function withNoVerify(dsn) {
+  try {
+    const u = new URL(dsn.replace('postgres://', 'postgresql://'));
+    u.searchParams.set('sslmode', 'no-verify');
+    return u.toString();
+  } catch {
+    return dsn + (dsn.includes('?') ? '&' : '?') + 'sslmode=no-verify';
+  }
+}
+
 function buildPoolerConnStr(baseConnStr) {
   const url = new URL(baseConnStr.replace('postgres://', 'postgresql://'));
   const username = decodeURIComponent(url.username || 'postgres');
@@ -20,12 +31,13 @@ function buildPoolerConnStr(baseConnStr) {
     'us-east-1','us-east-2','us-west-2','eu-central-1','eu-west-1','eu-west-2','eu-north-1',
     'ap-south-1','ap-southeast-1','ap-southeast-2','ap-northeast-1','sa-east-1'
   ];
-  return regions.map(r => `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@aws-0-${r}.pooler.supabase.com:6543/postgres?sslmode=require&options=project%3D${project}`);
+  return regions.map(r => withNoVerify(`postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@aws-0-${r}.pooler.supabase.com:6543/postgres?sslmode=require&options=project%3D${project}`));
 }
 
 async function getClient() {
-  const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL;
-  if (!primary) throw new Error('DATABASE_URL/NETLIFY_DATABASE_URL not set');
+  const primaryRaw = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL;
+  if (!primaryRaw) throw new Error('DATABASE_URL/NETLIFY_DATABASE_URL not set');
+  const primary = withNoVerify(primaryRaw);
   const tryConn = async (connStr) => {
     const c = new Client({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
     await c.connect();
