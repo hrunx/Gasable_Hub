@@ -31,6 +31,9 @@ def get_connection_params() -> PgConnInfo:
 
 
 def connect(dbname_override: str | None = None):
+	dsn = os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL") or os.getenv("NETLIFY_DATABASE_URL")
+	if dsn:
+		return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.DictCursor)
 	info = get_connection_params()
 	return psycopg2.connect(
 		host=info.host,

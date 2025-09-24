@@ -1,7 +1,7 @@
 const { Pool } = require('pg');
 
 function getPool() {
-  const connStr = process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL;
+  const connStr = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || process.env.NETLIFY_DATABASE_URL;
   if (!connStr) throw new Error('DATABASE_URL/NETLIFY_DATABASE_URL not set');
   return new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
 }

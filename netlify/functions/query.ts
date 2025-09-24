@@ -8,10 +8,8 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 let pgClient: Client | null = null;
 async function getPg(): Promise<Client> {
   if (!pgClient) {
-    pgClient = new Client({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false }
-    });
+    const connStr = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+    pgClient = new Client({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
     await pgClient.connect();
   }
   return pgClient;
