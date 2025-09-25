@@ -63,6 +63,10 @@ const SCHEMA = process.env.PG_SCHEMA || 'public';
 const TABLE = process.env.PG_TABLE || 'gasable_index';
 const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini';
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
+const TOP_K = Number(process.env.TOP_K || 40);
+const USE_BM25 = String(process.env.USE_BM25 || 'false').toLowerCase() === 'true';
+const RERANK_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini';
 
 function naiveExpansions(q) {
   const parts = String(q || '').split(/\s+/).filter(Boolean);
@@ -113,6 +117,70 @@ function simpleMMR(candidates, k = 8, lambda = 0.75) {
     selected.push(pick);
   }
   return selected;
+}
+
+async function embedOnce(query) {
+  if (!openai) return null;
+  try {
+    const payload = { model: EMBED_MODEL, input: query };
+    if (Number.isFinite(EMBED_DIM)) payload.dimensions = EMBED_DIM; // optional down-projection if used at ingest
+    const emb = await openai.embeddings.create(payload);
+    const vec = emb?.data?.[0]?.embedding || [];
+    if (vec.length && vec.length !== EMBED_DIM) {
+      console.warn(`Embedding dim mismatch: got ${vec.length}, expected ${EMBED_DIM}`);
+    }
+    return vec;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function bm25Search(db, q, k) {
+  const hasTsv = true; // allow using generated column if present; query is written to work either way
+  const sql = `
+    WITH docs AS (
+      SELECT node_id,
+             COALESCE(text, li_metadata->>'chunk') AS txt,
+             li_metadata,
+             to_tsvector('simple', COALESCE(text, li_metadata->>'chunk')) AS tsv
+      FROM ${SCHEMA}.${TABLE}
+    )
+    SELECT node_id, left(COALESCE(txt,''), 2000) AS text, li_metadata,
+           ts_rank_cd(tsv, plainto_tsquery('simple', $1)) AS score
+    FROM docs
+    WHERE tsv @@ plainto_tsquery('simple', $1)
+    ORDER BY score DESC
+    LIMIT $2`;
+  const { rows } = await db.query(sql, [q, k]);
+  return rows.map(r => ({ id: r.node_id, score: Number(r.score || 0), text: r.text || '', metadata: r.li_metadata }));
+}
+
+async function rerankLLM(q, hits, budgetMs) {
+  if (!openai || !hits?.length) return hits;
+  const t0 = Date.now();
+  const snip = (s) => String(s || '').replace(/\s+/g, ' ').slice(0, 900);
+  const passages = hits.map((h, i) => `[${i}] ${snip(h.text)}`).join('\n\n');
+  const sys = 'You are a precise reranker. Return a JSON array of objects: [{index:int, score:float}] with scores in [0,1]. No text other than the JSON array.';
+  try {
+    const resp = await openai.chat.completions.create({
+      model: RERANK_MODEL,
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: `Query: ${q}\n\nPassages:\n${passages}` },
+      ]
+    });
+    if (Date.now() - t0 > budgetMs) return hits;
+    const raw = resp.choices?.[0]?.message?.content || '[]';
+    const jsonText = (raw.match(/\[.*\]/s) || [raw])[0];
+    const arr = JSON.parse(jsonText);
+    const mapped = Array.isArray(arr) ? arr
+      .filter(x => Number.isFinite(x.index) && x.index >= 0 && x.index < hits.length)
+      .map(x => ({ ...hits[x.index], score: Number(x.score || 0) })) : hits;
+    mapped.sort((a,b) => b.score - a.score);
+    return mapped;
+  } catch {
+    return hits;
+  }
 }
 
 function json(code, obj) {
@@ -302,19 +370,17 @@ exports.handler = async (event, context) => {
         try {
           for (const exp of exps) {
             if (Date.now() - tStart > BUDGET_MS) break;
-            try {
-              const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: exp });
-              const vec = emb.data[0].embedding || [];
-              const vecText = '[' + vec.map(x => (Number.isFinite(x) ? x : 0)).join(',') + ']';
-              const { rows } = await db.query(
-                `SELECT node_id, left(text, 2000) AS text, 1 - (embedding <=> $1::vector) AS score
-                 FROM ${SCHEMA}.${TABLE}
-                 ORDER BY embedding <=> $1::vector
-                 LIMIT 6`, [vecText]
-              );
-              denseLists.push(rows.map(r => ({ id: r.node_id, score: Number(r.score) })));
-              rows.forEach(r => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
-            } catch (_) {}
+            const vec = await embedOnce(exp);
+            if (!vec?.length) continue;
+            const vecText = '[' + vec.map(x => (Number.isFinite(x) ? x : 0)).join(',') + ']';
+            const { rows } = await db.query(
+              `SELECT node_id, left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text, 1 - (embedding <=> $1::vector) AS score
+               FROM ${SCHEMA}.${TABLE}
+               ORDER BY embedding <=> $1::vector
+               LIMIT 6`, [vecText]
+            );
+            denseLists.push(rows.map(r => ({ id: r.node_id, score: Number(r.score) })));
+            rows.forEach(r => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
           }
         } catch (_) {}
 
@@ -324,7 +390,7 @@ exports.handler = async (event, context) => {
           const tokens = String(exp).split(/\s+/).filter(w => w.length > 2).slice(0, 6);
           const pats = tokens.map(t => `%${t}%`);
           const conds = tokens.map((_, i) => `text ILIKE $${i + 1}`).join(' OR ') || 'TRUE';
-          const sql = `SELECT node_id, left(text, 2000) AS text, length(text) AS L FROM ${SCHEMA}.${TABLE} WHERE ${conds} ORDER BY L DESC LIMIT 6`;
+          const sql = `SELECT node_id, left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text, length(COALESCE(text, li_metadata->>'chunk')) AS L FROM ${SCHEMA}.${TABLE} WHERE ${conds} ORDER BY L DESC LIMIT 6`;
           try {
             const { rows } = await db.query(sql, pats);
             lexLists.push(rows.map((r, i) => ({ id: r.node_id, score: 1 / (i + 1) })));
@@ -332,21 +398,34 @@ exports.handler = async (event, context) => {
           } catch (_) {}
         }
 
-        const fused = rrfFuse([...denseLists, ...lexLists], 16);
+        let fused = rrfFuse([...denseLists, ...lexLists], 16);
         // Build candidate objects and lightly boost gasable.com domain
-        const cands = fused.map(f => ({ id: f.id, score: f.score, text: (denseRows[f.id]?.text || '') }))
+        let cands = fused.map(f => ({ id: f.id, score: f.score, text: (denseRows[f.id]?.text || '') }))
           .sort((a, b) => {
             const da = a.id.startsWith('web://https://www.gasable.com') ? 1 : (a.id.startsWith('web://') ? 0.5 : 0);
             const dbs = b.id.startsWith('web://https://www.gasable.com') ? 1 : (b.id.startsWith('web://') ? 0.5 : 0);
             if (da !== dbs) return dbs - da;
             return 0;
           });
+        // Optional BM25 blend for hybrid (parity with FastAPI)
+        if (USE_BM25 && (Date.now() - tStart) < BUDGET_MS) {
+          try {
+            const bm = await bm25Search(db, q, 16);
+            const bmMap = new Map(bm.map(x => [x.id, x]));
+            const merged = new Map();
+            for (const h of [...cands, ...bm]) {
+              const prev = merged.get(h.id);
+              if (!prev || h.score > prev.score) merged.set(h.id, h);
+            }
+            cands = Array.from(merged.values());
+          } catch (_) {}
+        }
         const selected = simpleMMR(cands, 6, 0.75);
 
         const context = selected.map((s, i) => `[${i + 1}] ${s.text}`).join('\n\n');
         let formatted = '';
         const timeLeft = BUDGET_MS - (Date.now() - tStart);
-        if (timeLeft > 2000) {
+        if (timeLeft > 2500) {
           try {
             const comp = await openai.chat.completions.create({
               model: ANSWER_MODEL,
