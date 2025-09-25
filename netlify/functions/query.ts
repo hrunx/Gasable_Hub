@@ -1,6 +1,5 @@
-// Relax TLS in Netlify runtime to avoid self-signed chain errors
-(process as any).env.NODE_TLS_REJECT_UNAUTHORIZED = (process as any).env.NODE_TLS_REJECT_UNAUTHORIZED || "0";
-;(process as any).env.PGSSLMODE = (process as any).env.PGSSLMODE || "no-verify";
+// Ensure SSL but allow poolers with no-verify if configured upstream
+;(process as any).env.PGSSLMODE = (process as any).env.PGSSLMODE || "require";
 import type { Handler } from "@netlify/functions";
 import OpenAI from "openai";
 import { Client } from "pg";
@@ -135,7 +134,7 @@ export const handler: Handler = async (event) => {
 
     const context = hits.map((h, i) => `[${i + 1}] ${h.text}`).join("\n\n");
     const messages = [
-      { role: "system", content: "Be informative but succinct. Use markdown. Begin with a short heading when appropriate, then provide 5–10 clear bullet points with brief clarifications. Cite sources with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
+      { role: "system", content: "Output ONLY plain bullet points ('- ' prefix). 5–10 bullets max. No heading, no extra text. Keep each bullet concise. Cite sources inline with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, output exactly: 'No context available.'" },
       { role: "user", content: `Question: ${q}\n\nContext:\n${context}` }
     ] as any;
     const comp = await openai.chat.completions.create({

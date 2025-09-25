@@ -9,9 +9,8 @@ type PgClient = {
 };
 // Avoid pgvector import issues by passing vector text directly
 
-// Relax TLS on Netlify to avoid self-signed chain errors
-(process as any).env.NODE_TLS_REJECT_UNAUTHORIZED = (process as any).env.NODE_TLS_REJECT_UNAUTHORIZED || "0";
-(process as any).env.PGSSLMODE = (process as any).env.PGSSLMODE || "no-verify";
+// Use default TLS verification; rely on proper DATABASE_URL SSL params
+(process as any).env.PGSSLMODE = (process as any).env.PGSSLMODE || "require";
 
 const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-large";
 const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);

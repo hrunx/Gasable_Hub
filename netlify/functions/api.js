@@ -1,5 +1,5 @@
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED || '0';
-process.env.PGSSLMODE = process.env.PGSSLMODE || 'no-verify';
+// Enforce TLS verification (avoid insecure override); rely on DATABASE_URL sslmode
+process.env.PGSSLMODE = process.env.PGSSLMODE || 'require';
 const { Client } = require('pg');
 const OpenAI = require('openai');
 
@@ -345,7 +345,7 @@ exports.handler = async (event, context) => {
           const comp = await openai.chat.completions.create({
             model: ANSWER_MODEL,
             messages: [
-              { role: 'system', content: "Be informative but succinct. Use markdown. Begin with a short heading when appropriate, then provide 5–10 clear bullet points with brief clarifications. Cite sources with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
+              { role: 'system', content: "Output ONLY plain bullet points ('- ' prefix). 5–10 bullets max. No heading, no extra text, no numbering. Keep each bullet concise. Cite sources inline with [1], [2] based on the provided bracketed context indices. If context is missing or irrelevant, output exactly: 'No context available.'" },
               { role: 'user', content: `Question: ${q}\n\nContext:\n${context}` }
             ]
           });
