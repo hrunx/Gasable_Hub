@@ -54,26 +54,49 @@
     appendStream('Starting...', 'start');
     const isNetlify = location.hostname.endsWith('netlify.app');
     if (isNetlify) {
-      // Call Netlify single-shot API (hybrid + LLM formatting via /api/query)
+      // Background job start
       try {
-        const res = await fetch('/api/query', {
+        const start = await fetch('/.netlify/functions/query_job-background', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ q: query })
         });
-        const data = await res.json();
-        if (data.error) {
-          appendStream(`error ${data.error}`, 'error');
-          out.innerHTML += `<div class=\"bot\">${data.error}</div>`;
-        } else {
-          const html = String(data.answer_html || (data.answer||'').replace(/\n/g,'<br>'));
-          out.innerHTML += `<div class=\"bot\">${html}</div>`;
-        }
+        const started = await start.json();
+        if (!started.id) throw new Error(started.error || 'no job id');
+        appendStream(`job ${started.id}`, 'info');
+        // Open SSE relay
+        const es = new EventSource(`/.netlify/functions/query_events?id=${encodeURIComponent(started.id)}`);
+        es.addEventListener('step', (evt) => {
+          try {
+            const data = JSON.parse(evt.data);
+            const label = data.step || 'step';
+            const info = Object.entries(data).filter(([k]) => k !== 'step').map(([k,v]) => `${k}=${typeof v==='object'?JSON.stringify(v):v}`).join(' ');
+            appendStream(`${label} ${info}`);
+          } catch {}
+        });
+        es.addEventListener('final', (evt) => {
+          try {
+            const data = JSON.parse(evt.data);
+            if (data.error) {
+              appendStream(`error ${data.error}`, 'error');
+              out.innerHTML += `<div class=\"bot\">${data.error}</div>`;
+            } else {
+              const html = String(data.answer_html || (data.answer||'').replace(/\n/g,'<br>'));
+              out.innerHTML += `<div class=\"bot\">${html}</div>`;
+            }
+          } catch (e) {
+            out.innerHTML += `<div class=\"bot\">${String(e)}</div>`;
+          } finally {
+            es.close();
+            out.scrollTop = out.scrollHeight;
+          }
+        });
+        es.onerror = () => { appendStream('stream error', 'error'); es.close(); };
       } catch (err) {
         appendStream('request error', 'error');
         out.innerHTML += `<div class=\"bot\">${String(err)}</div>`;
+        out.scrollTop = out.scrollHeight;
       }
-      out.scrollTop = out.scrollHeight;
     } else {
       // Local FastAPI streaming SSE
       const ssePath = '/api/query_stream';

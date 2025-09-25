@@ -155,36 +155,38 @@ export default async (req: Request): Promise<Response> => {
         const t0 = nowMs();
         const denseLists: Array<Array<{ id: string; score: number }>> = [];
         const denseRows: Record<string, { text: string }> = {};
-        for (const exp of exps) {
+        await Promise.all(exps.map(async (exp) => {
           try {
             const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: exp });
             const vec = emb.data[0].embedding as number[];
             const vecText = `[${vec.map((x:number)=> (Number.isFinite(x)?x:0)).join(',')}]`;
             const { rows } = await pg.query(
-              `SELECT node_id, text, 1 - (embedding <=> $1::vector) AS score
+              `SELECT node_id, left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text, 1 - (embedding <=> $1::vector) AS score
                FROM ${SCHEMA}.${TABLE}
                ORDER BY embedding <=> $1::vector
-               LIMIT 8`, [vecText]
+               LIMIT 6`, [vecText]
             );
-            denseLists.push(rows.map((r: any, i: number) => ({ id: r.node_id, score: Number(r.score) })));
+            denseLists.push(rows.map((r: any) => ({ id: r.node_id, score: Number(r.score) })));
             rows.forEach((r: any) => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
           } catch (_) {}
-        }
+        }));
         const t1 = nowMs();
         sse(controller, "step", { step: "dense_retrieval", lists: denseLists.length, ms: t1 - t0 });
 
         // Lexical retrieval
         const t2 = nowMs();
         const lexLists: Array<Array<{ id: string; score: number }>> = [];
-        for (const exp of exps) {
+        await Promise.all(exps.map(async (exp) => {
           const tokens = exp.split(/\s+/).filter(w => w.length > 2).slice(0, 6);
           const pats = tokens.map(t => `%${t}%`);
-          const conds = tokens.map((_, i) => `text ILIKE $${i + 1}`).join(" OR ") || "TRUE";
-          const sql = `SELECT node_id, left(text, 2000) AS text, length(text) AS L FROM ${SCHEMA}.${TABLE} WHERE ${conds} ORDER BY L DESC LIMIT 8`;
-          const { rows } = await pg.query(sql, pats);
-          lexLists.push(rows.map((r: any, i: number) => ({ id: r.node_id, score: 1 / (i + 1) })));
-          rows.forEach((r: any) => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
-        }
+          const conds = tokens.map((_, i) => `COALESCE(text, li_metadata->>'chunk') ILIKE $${i + 1}`).join(" OR ") || "TRUE";
+          const sql = `SELECT node_id, left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text, length(COALESCE(text, li_metadata->>'chunk')) AS L FROM ${SCHEMA}.${TABLE} WHERE ${conds} ORDER BY L DESC LIMIT 6`;
+          try {
+            const { rows } = await pg.query(sql, pats);
+            lexLists.push(rows.map((r: any, i: number) => ({ id: r.node_id, score: 1 / (i + 1) })));
+            rows.forEach((r: any) => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
+          } catch (_) {}
+        }));
         const t3 = nowMs();
         sse(controller, "step", { step: "lex_retrieval", lists: lexLists.length, ms: t3 - t2 });
 
