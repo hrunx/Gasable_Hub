@@ -136,18 +136,13 @@ async function embedOnce(query) {
 }
 
 async function bm25Search(db, q, k) {
-  const hasTsv = true; // allow using generated column if present; query is written to work either way
+  // Use persisted tsv column when available (see migrations/0007_bm25_tsv.sql)
   const sql = `
-    WITH docs AS (
-      SELECT node_id,
-             COALESCE(text, li_metadata->>'chunk') AS txt,
-             li_metadata,
-             to_tsvector('simple', COALESCE(text, li_metadata->>'chunk')) AS tsv
-      FROM ${SCHEMA}.${TABLE}
-    )
-    SELECT node_id, left(COALESCE(txt,''), 2000) AS text, li_metadata,
+    SELECT node_id,
+           left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
+           li_metadata,
            ts_rank_cd(tsv, plainto_tsquery('simple', $1)) AS score
-    FROM docs
+    FROM ${SCHEMA}.${TABLE}
     WHERE tsv @@ plainto_tsquery('simple', $1)
     ORDER BY score DESC
     LIMIT $2`;
