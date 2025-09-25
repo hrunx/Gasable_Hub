@@ -183,6 +183,81 @@ async function rerankLLM(q, hits, budgetMs) {
   }
 }
 
+async function generateExpansionsLLM(q, maxOut = 3, budgetMs = 1800) {
+  if (!openai) return naiveExpansions(q).slice(0, maxOut);
+  const t0 = Date.now();
+  const sys = "You produce only a JSON array of search queries. Include English and Arabic variants if helpful. No text outside JSON.";
+  try {
+    const resp = await openai.chat.completions.create({
+      model: RERANK_MODEL,
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: `Original: ${q}\nReturn up to ${maxOut} concise search queries as a JSON array.` },
+      ]
+    });
+    if (Date.now() - t0 > budgetMs) return naiveExpansions(q).slice(0, maxOut);
+    const content = resp.choices?.[0]?.message?.content || '[]';
+    const jsonText = (content.match(/\[.*\]/s) || [content])[0];
+    const arr = JSON.parse(jsonText);
+    const out = [q];
+    const seen = new Set([q.trim().toLowerCase()]);
+    if (Array.isArray(arr)) {
+      for (const v of arr) {
+        const s = String(v || '').trim();
+        if (!s) continue;
+        const key = s.toLowerCase();
+        if (!seen.has(key)) { out.push(s); seen.add(key); }
+        if (out.length >= maxOut) break;
+      }
+    }
+    return out.slice(0, maxOut);
+  } catch {
+    return naiveExpansions(q).slice(0, maxOut);
+  }
+}
+
+async function keywordPrefilter(db, q, limitEach = 20) {
+  const qnorm = String(q || '').toLowerCase();
+  const en = [
+    'contract','contracts','supplier','suppliers','diesel','fuel','agreement','terms','pricing',
+    'scope','deliverables','penalties','liability','payment','rfq','tender','bid','procurement'
+  ];
+  const ar = [
+    'عقد','عقود','مورد','المورد','موردين','ديزل','وقود','اتفاق','اتفاقية','شروط','تسعير','مناقصة','توريد'
+  ];
+  const kws = new Set();
+  for (const w of [...en, ...ar]) if (qnorm.includes(w)) kws.add(w);
+  if (kws.size === 0) return [];
+  const patterns = Array.from(kws).map(k => `%${k}%`);
+  const lists = [];
+  try {
+    const sql = `SELECT node_id, left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text
+                 FROM ${SCHEMA}.${TABLE}
+                 WHERE ${patterns.map((_, i) => `COALESCE(text, li_metadata->>'chunk') ILIKE $${i+1}`).join(' OR ')}
+                 LIMIT $${patterns.length + 1}`;
+    const { rows } = await db.query(sql, [...patterns, limitEach]);
+    lists.push(rows.map(r => ({ id: r.node_id, score: 0.75, text: r.text || '' })));
+  } catch {}
+  // Optional: try documents / embeddings if present
+  try {
+    const sql2 = `SELECT id::text AS node_id, left(COALESCE(content,''), 2000) AS text
+                  FROM public.documents
+                  WHERE ${patterns.map((_, i) => `content ILIKE $${i+1}`).join(' OR ')}
+                  ORDER BY id DESC LIMIT $${patterns.length + 1}`;
+    const { rows } = await db.query(sql2, [...patterns, limitEach]);
+    lists.push(rows.map(r => ({ id: `documents:${r.node_id}`, score: 0.7, text: r.text || '' })));
+  } catch {}
+  try {
+    const sql3 = `SELECT id::text AS node_id, left(COALESCE(chunk_text,''), 2000) AS text
+                  FROM public.embeddings
+                  WHERE ${patterns.map((_, i) => `chunk_text ILIKE $${i+1}`).join(' OR ')}
+                  ORDER BY id DESC LIMIT $${patterns.length + 1}`;
+    const { rows } = await db.query(sql3, [...patterns, limitEach]);
+    lists.push(rows.map(r => ({ id: `embeddings:${r.node_id}`, score: 0.65, text: r.text || '' })));
+  } catch {}
+  return lists;
+}
+
 function json(code, obj) {
   return { statusCode: code, headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) };
 }
@@ -364,7 +439,8 @@ exports.handler = async (event, context) => {
 
       // If OpenAI is configured, run a hybrid retrieval + LLM formatting; else use lexical only
       if (openai) {
-        const exps = naiveExpansions(q);
+        // LLM-based expansions with budget
+        const exps = await generateExpansionsLLM(q, 3, 1500);
         const denseLists = [];
         const denseRows = {};
         try {
@@ -397,6 +473,19 @@ exports.handler = async (event, context) => {
             rows.forEach(r => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
           } catch (_) {}
         }
+
+        // Keyword prefilter lists (improves recall on domain-specific terms)
+        try {
+          const kwLists = await keywordPrefilter(db, q, 20);
+          if (kwLists?.length) {
+            for (const lst of kwLists) {
+              if (Array.isArray(lst)) {
+                lexLists.push(lst.map(x => ({ id: x.id, score: x.score || 0.6 })));
+                lst.forEach(x => { if (!denseRows[x.id]) denseRows[x.id] = { text: x.text }; });
+              }
+            }
+          }
+        } catch (_) {}
 
         let fused = rrfFuse([...denseLists, ...lexLists], 16);
         // Build candidate objects and lightly boost gasable.com domain
