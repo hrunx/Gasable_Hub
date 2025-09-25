@@ -18,6 +18,7 @@ const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
 const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
 const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+const STREAM_BUDGET_MS = Number((process as any).env.STREAM_BUDGET_MS || 8000);
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -92,7 +93,7 @@ function naiveExpansions(q: string): string[] {
   add(parts.map(p => p.replace(/ing\b/i, "")).join(" "));
   add(parts.map(p => p.replace(/s\b/i, "")).join(" "));
   add(parts.map(p => p.length > 6 ? p.slice(0, 6) : p).join(" "));
-  return Array.from(uniq).slice(0, 5);
+  return Array.from(uniq).slice(0, 3);
 }
 
 function rrfFuse(lists: Array<Array<{ id: string; score: number }>>, k = 8) {
@@ -144,6 +145,7 @@ export default async (req: Request): Promise<Response> => {
   const stream = new ReadableStream({
     start: async (controller) => {
       try {
+        const tStart = nowMs();
         sse(controller, "step", { step: "received_query", lang: "en" });
         const exps = naiveExpansions(q);
         sse(controller, "step", { step: "expansions", count: exps.length });
@@ -214,6 +216,18 @@ export default async (req: Request): Promise<Response> => {
           return s.trim();
         };
         let answer = "";
+        const elapsed = nowMs() - tStart;
+        if (elapsed > STREAM_BUDGET_MS) {
+          answer = sanitize(selected.map(s => s.text).join("\n\n"));
+          const resBody = {
+            query: q,
+            hits: selected.map(s => ({ id: s.id, score: s.score })),
+            answer,
+          };
+          sse(controller, "final", resBody);
+          controller.close();
+          return;
+        }
         try {
           const comp = await openai.chat.completions.create({
             model: ANSWER_MODEL,

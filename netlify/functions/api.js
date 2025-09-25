@@ -1,6 +1,7 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED || '0';
 process.env.PGSSLMODE = process.env.PGSSLMODE || 'no-verify';
 const { Client } = require('pg');
+const OpenAI = require('openai');
 
 function extractProjectRef() {
   const supaUrl = process.env.SUPABASE_URL || '';
@@ -54,6 +55,64 @@ async function getClient() {
     }
     throw e;
   }
+}
+
+// --- RAG helpers (hybrid retrieval + formatting) ---
+const EMBED_MODEL = process.env.EMBED_MODEL || 'text-embedding-3-large';
+const SCHEMA = process.env.PG_SCHEMA || 'public';
+const TABLE = process.env.PG_TABLE || 'gasable_index';
+const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini';
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+
+function naiveExpansions(q) {
+  const parts = String(q || '').split(/\s+/).filter(Boolean);
+  const set = new Set();
+  const add = (t) => { if (t && !set.has(t)) set.add(t); };
+  add(q);
+  add(parts.slice().reverse().join(' '));
+  add(parts.map(p => p.replace(/ing\b/i, '')).join(' '));
+  add(parts.map(p => p.replace(/s\b/i, '')).join(' '));
+  return Array.from(set).slice(0, 4);
+}
+
+function rrfFuse(lists, k = 20) {
+  const K = 60;
+  const scores = new Map();
+  for (const list of lists) {
+    list.forEach((item, idx) => {
+      const prev = scores.get(item.id) || 0;
+      scores.set(item.id, prev + 1 / (K + idx + 1));
+    });
+  }
+  return Array.from(scores.entries()).sort((a,b) => b[1] - a[1]).slice(0, k).map(([id,score]) => ({ id, score }));
+}
+
+function simpleMMR(candidates, k = 8, lambda = 0.75) {
+  const selected = [];
+  const used = new Set();
+  const tokensOf = (t) => new Set(String(t||'').split(/\W+/).filter(x => x.length > 2));
+  const sim = (a, b) => {
+    const A = tokensOf(a), B = tokensOf(b);
+    const inter = Array.from(A).filter(x => B.has(x)).length;
+    const denom = Math.sqrt(A.size * B.size) || 1;
+    return inter / denom;
+  };
+  while (selected.length < k && candidates.length) {
+    let best = -Infinity, bestIdx = -1;
+    for (let i=0;i<candidates.length;i++) {
+      if (used.has(candidates[i].id)) continue;
+      const rel = candidates[i].score;
+      let div = 0;
+      for (const s of selected) div = Math.max(div, sim(candidates[i].text, s.text));
+      const val = lambda * rel - (1 - lambda) * div;
+      if (val > best) { best = val; bestIdx = i; }
+    }
+    if (bestIdx === -1) break;
+    const pick = candidates.splice(bestIdx, 1)[0];
+    used.add(pick.id);
+    selected.push(pick);
+  }
+  return selected;
 }
 
 function json(code, obj) {
@@ -216,55 +275,6 @@ exports.handler = async (event, context) => {
       const q = (body.q || '').trim();
       if (!q) return json(400, { error: 'Empty query' });
       
-      // Prefer gasable.com web content first
-      const preferDomain = `web://%gasable.com%`;
-
-      // token-based lexical scoring
-      const tokens = q.split(/\s+/).map(t => t.trim()).filter(t => t.length >= 2).slice(0, 8);
-      const ilikes = tokens.map((_, i) => `CASE WHEN text ILIKE $${i + 1} THEN 1 ELSE 0 END`).join(' + ') || '0';
-      const params = tokens.map(t => `%${t}%`);
-
-      // 1) Domain-prioritized search
-      let sql = `
-        SELECT node_id, left(text, 2000) AS text, (${ilikes}) AS score
-        FROM public.gasable_index
-        WHERE node_id LIKE $${params.length + 1}
-        ORDER BY score DESC, length(text) DESC
-        LIMIT 8
-      `;
-      let r = await db.query(sql, [...params, preferDomain]);
-
-      // 2) If empty, general search
-      if (r.rows.length === 0) {
-        sql = `
-          SELECT node_id, left(text, 2000) AS text, (${ilikes}) AS score
-          FROM public.gasable_index
-          ORDER BY score DESC, length(text) DESC
-          LIMIT 8
-        `;
-        r = await db.query(sql, params);
-      }
-
-      // 3) If still empty, trigram fallback scoped to domain first
-      if (r.rows.length === 0) {
-        r = await db.query(`
-          SELECT node_id, left(text, 2000) AS text
-          FROM public.gasable_index
-          WHERE node_id LIKE $1 AND text % $2
-          ORDER BY similarity(text, $2) DESC
-          LIMIT 8
-        `, [preferDomain, q]);
-      }
-      if (r.rows.length === 0) {
-        r = await db.query(`
-          SELECT node_id, left(text, 2000) AS text
-          FROM public.gasable_index
-          WHERE text % $1
-          ORDER BY similarity(text, $1) DESC
-          LIMIT 8
-        `, [q]);
-      }
-
       const clean = (t) => {
         if (!t) return '';
         let s = String(t);
@@ -281,11 +291,117 @@ exports.handler = async (event, context) => {
         s = s.replace(/\n{3,}/g, '\n\n');
         return s.trim();
       };
+
+      // If OpenAI is configured, run a hybrid retrieval + LLM formatting; else use lexical only
+      if (openai) {
+        const exps = naiveExpansions(q);
+        const denseLists = [];
+        const denseRows = {};
+        try {
+          for (const exp of exps) {
+            try {
+              const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: exp });
+              const vec = emb.data[0].embedding || [];
+              const vecText = '[' + vec.map(x => (Number.isFinite(x) ? x : 0)).join(',') + ']';
+              const { rows } = await db.query(
+                `SELECT node_id, left(text, 2000) AS text, 1 - (embedding <=> $1::vector) AS score
+                 FROM ${SCHEMA}.${TABLE}
+                 ORDER BY embedding <=> $1::vector
+                 LIMIT 8`, [vecText]
+              );
+              denseLists.push(rows.map(r => ({ id: r.node_id, score: Number(r.score) })));
+              rows.forEach(r => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
+            } catch (_) {}
+          }
+        } catch (_) {}
+
+        const lexLists = [];
+        for (const exp of exps) {
+          const tokens = String(exp).split(/\s+/).filter(w => w.length > 2).slice(0, 6);
+          const pats = tokens.map(t => `%${t}%`);
+          const conds = tokens.map((_, i) => `text ILIKE $${i + 1}`).join(' OR ') || 'TRUE';
+          const sql = `SELECT node_id, left(text, 2000) AS text, length(text) AS L FROM ${SCHEMA}.${TABLE} WHERE ${conds} ORDER BY L DESC LIMIT 8`;
+          try {
+            const { rows } = await db.query(sql, pats);
+            lexLists.push(rows.map((r, i) => ({ id: r.node_id, score: 1 / (i + 1) })));
+            rows.forEach(r => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
+          } catch (_) {}
+        }
+
+        const fused = rrfFuse([...denseLists, ...lexLists], 20);
+        // Build candidate objects and lightly boost gasable.com domain
+        const cands = fused.map(f => ({ id: f.id, score: f.score, text: (denseRows[f.id]?.text || '') }))
+          .sort((a, b) => {
+            const da = a.id.startsWith('web://https://www.gasable.com') ? 1 : (a.id.startsWith('web://') ? 0.5 : 0);
+            const dbs = b.id.startsWith('web://https://www.gasable.com') ? 1 : (b.id.startsWith('web://') ? 0.5 : 0);
+            if (da !== dbs) return dbs - da;
+            return 0;
+          });
+        const selected = simpleMMR(cands, 8, 0.75);
+
+        const context = selected.map((s, i) => `[${i + 1}] ${s.text}`).join('\n\n');
+        let formatted = '';
+        try {
+          const comp = await openai.chat.completions.create({
+            model: ANSWER_MODEL,
+            messages: [
+              { role: 'system', content: "Be informative but succinct. Use markdown. Begin with a short heading when appropriate, then provide 5–10 clear bullet points with brief clarifications. Cite sources with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
+              { role: 'user', content: `Question: ${q}\n\nContext:\n${context}` }
+            ]
+          });
+          formatted = clean(comp.choices[0].message.content || '');
+        } catch (_) {
+          formatted = clean(selected.map(s => s.text).join('\n\n'));
+        }
+
+        const sources = selected.map(s => String(s.id || '').replace(/^web:\/\//, '').replace(/^file:\/\//, ''));
+        const ctxIds = selected.map(s => s.id);
+        return json(200, { answer: formatted, answer_html: formatted.replace(/\n/g, '<br>'), context_ids: ctxIds, sources });
+      }
+
+      // --- Fallback: lexical only (no OpenAI) ---
+      // Prefer gasable.com web content first
+      const preferDomain = `web://%gasable.com%`;
+      const tokens = q.split(/\s+/).map(t => t.trim()).filter(t => t.length >= 2).slice(0, 8);
+      const ilikes = tokens.map((_, i) => `CASE WHEN text ILIKE $${i + 1} THEN 1 ELSE 0 END`).join(' + ') || '0';
+      const params = tokens.map(t => `%${t}%`);
+      let sql = `
+        SELECT node_id, left(text, 2000) AS text, (${ilikes}) AS score
+        FROM ${SCHEMA}.${TABLE}
+        WHERE node_id LIKE $${params.length + 1}
+        ORDER BY score DESC, length(text) DESC
+        LIMIT 8
+      `;
+      let r = await db.query(sql, [...params, preferDomain]);
+      if (r.rows.length === 0) {
+        sql = `
+          SELECT node_id, left(text, 2000) AS text, (${ilikes}) AS score
+          FROM ${SCHEMA}.${TABLE}
+          ORDER BY score DESC, length(text) DESC
+          LIMIT 8
+        `;
+        r = await db.query(sql, params);
+      }
+      if (r.rows.length === 0) {
+        r = await db.query(`
+          SELECT node_id, left(text, 2000) AS text
+          FROM ${SCHEMA}.${TABLE}
+          WHERE node_id LIKE $1 AND text % $2
+          ORDER BY similarity(text, $2) DESC
+          LIMIT 8
+        `, [preferDomain, q]);
+      }
+      if (r.rows.length === 0) {
+        r = await db.query(`
+          SELECT node_id, left(text, 2000) AS text
+          FROM ${SCHEMA}.${TABLE}
+          WHERE text % $1
+          ORDER BY similarity(text, $1) DESC
+          LIMIT 8
+        `, [q]);
+      }
       const answer = clean(r.rows.map(x => x.text).join('\n\n'));
-      const sources = r.rows.map(x => String(x.node_id || '')
-        .replace(/^web:\/\//, '')
-        .replace(/^file:\/\//, '')
-      );
+      const sources = r.rows.map(x => String(x.node_id || '').replace(/^web:\/\//, '').replace(/^file:\/\//, ''));
       return json(200, { answer, answer_html: answer.replace(/\n/g, '<br>'), context_ids: r.rows.map(x => x.node_id), sources });
     }
 
