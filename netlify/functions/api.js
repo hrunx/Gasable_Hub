@@ -72,7 +72,7 @@ function naiveExpansions(q) {
   add(parts.slice().reverse().join(' '));
   add(parts.map(p => p.replace(/ing\b/i, '')).join(' '));
   add(parts.map(p => p.replace(/s\b/i, '')).join(' '));
-  return Array.from(set).slice(0, 4);
+  return Array.from(set).slice(0, 3);
 }
 
 function rrfFuse(lists, k = 20) {
@@ -274,6 +274,8 @@ exports.handler = async (event, context) => {
       try { body = JSON.parse(event.body || '{}'); } catch (_) {}
       const q = (body.q || '').trim();
       if (!q) return json(400, { error: 'Empty query' });
+      const BUDGET_MS = Number(process.env.SINGLESHOT_BUDGET_MS || 8000);
+      const tStart = Date.now();
       
       const clean = (t) => {
         if (!t) return '';
@@ -299,6 +301,7 @@ exports.handler = async (event, context) => {
         const denseRows = {};
         try {
           for (const exp of exps) {
+            if (Date.now() - tStart > BUDGET_MS) break;
             try {
               const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: exp });
               const vec = emb.data[0].embedding || [];
@@ -307,7 +310,7 @@ exports.handler = async (event, context) => {
                 `SELECT node_id, left(text, 2000) AS text, 1 - (embedding <=> $1::vector) AS score
                  FROM ${SCHEMA}.${TABLE}
                  ORDER BY embedding <=> $1::vector
-                 LIMIT 8`, [vecText]
+                 LIMIT 6`, [vecText]
               );
               denseLists.push(rows.map(r => ({ id: r.node_id, score: Number(r.score) })));
               rows.forEach(r => { if (!denseRows[r.node_id]) denseRows[r.node_id] = { text: r.text }; });
@@ -317,10 +320,11 @@ exports.handler = async (event, context) => {
 
         const lexLists = [];
         for (const exp of exps) {
+          if (Date.now() - tStart > BUDGET_MS) break;
           const tokens = String(exp).split(/\s+/).filter(w => w.length > 2).slice(0, 6);
           const pats = tokens.map(t => `%${t}%`);
           const conds = tokens.map((_, i) => `text ILIKE $${i + 1}`).join(' OR ') || 'TRUE';
-          const sql = `SELECT node_id, left(text, 2000) AS text, length(text) AS L FROM ${SCHEMA}.${TABLE} WHERE ${conds} ORDER BY L DESC LIMIT 8`;
+          const sql = `SELECT node_id, left(text, 2000) AS text, length(text) AS L FROM ${SCHEMA}.${TABLE} WHERE ${conds} ORDER BY L DESC LIMIT 6`;
           try {
             const { rows } = await db.query(sql, pats);
             lexLists.push(rows.map((r, i) => ({ id: r.node_id, score: 1 / (i + 1) })));
@@ -328,7 +332,7 @@ exports.handler = async (event, context) => {
           } catch (_) {}
         }
 
-        const fused = rrfFuse([...denseLists, ...lexLists], 20);
+        const fused = rrfFuse([...denseLists, ...lexLists], 16);
         // Build candidate objects and lightly boost gasable.com domain
         const cands = fused.map(f => ({ id: f.id, score: f.score, text: (denseRows[f.id]?.text || '') }))
           .sort((a, b) => {
@@ -337,21 +341,29 @@ exports.handler = async (event, context) => {
             if (da !== dbs) return dbs - da;
             return 0;
           });
-        const selected = simpleMMR(cands, 8, 0.75);
+        const selected = simpleMMR(cands, 6, 0.75);
 
         const context = selected.map((s, i) => `[${i + 1}] ${s.text}`).join('\n\n');
         let formatted = '';
-        try {
-          const comp = await openai.chat.completions.create({
-            model: ANSWER_MODEL,
-            messages: [
-              { role: 'system', content: "Output ONLY plain bullet points ('- ' prefix). 5–10 bullets max. No heading, no extra text, no numbering. Keep each bullet concise. Cite sources inline with [1], [2] based on the provided bracketed context indices. If context is missing or irrelevant, output exactly: 'No context available.'" },
-              { role: 'user', content: `Question: ${q}\n\nContext:\n${context}` }
-            ]
-          });
-          formatted = clean(comp.choices[0].message.content || '');
-        } catch (_) {
-          formatted = clean(selected.map(s => s.text).join('\n\n'));
+        const timeLeft = BUDGET_MS - (Date.now() - tStart);
+        if (timeLeft > 2000) {
+          try {
+            const comp = await openai.chat.completions.create({
+              model: ANSWER_MODEL,
+              messages: [
+                { role: 'system', content: "Output ONLY plain bullet points ('- ' prefix). 5–10 bullets max. No heading, no extra text, no numbering. Keep each bullet concise. Cite sources inline with [1], [2] based on the provided bracketed context indices. If context is missing or irrelevant, output exactly: 'No context available.'" },
+                { role: 'user', content: `Question: ${q}\n\nContext:\n${context}` }
+              ]
+            });
+            formatted = clean(comp.choices[0].message.content || '');
+          } catch (_) {
+            formatted = clean(selected.map(s => s.text).join('\n\n'));
+          }
+        } else {
+          // Budget exceeded: create quick bullets from selected texts
+          const text = clean(selected.map(s => s.text).join('\n'));
+          const sentences = text.split(/(?<=[.!؟])\s+/).filter(Boolean).slice(0, 8);
+          formatted = sentences.map(s => `- ${s}`).join('\n');
         }
 
         const sources = selected.map(s => String(s.id || '').replace(/^web:\/\//, '').replace(/^file:\/\//, ''));
