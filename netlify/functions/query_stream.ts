@@ -17,6 +17,7 @@ const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
 const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
 const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+const EMBED_COL = (process.env.PG_EMBED_COL || 'embedding').replace(/[^a-zA-Z0-9_]/g,'');
 const STREAM_BUDGET_MS = Number((process as any).env.STREAM_BUDGET_MS || 8000);
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -161,9 +162,9 @@ export default async (req: Request): Promise<Response> => {
             const vec = emb.data[0].embedding as number[];
             const vecText = `[${vec.map((x:number)=> (Number.isFinite(x)?x:0)).join(',')}]`;
             const { rows } = await pg.query(
-              `SELECT node_id, left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text, 1 - (embedding <=> $1::vector) AS score
+              `SELECT node_id, left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text, 1 - (${EMBED_COL} <=> $1::vector) AS score
                FROM ${SCHEMA}.${TABLE}
-               ORDER BY embedding <=> $1::vector
+               ORDER BY ${EMBED_COL} <=> $1::vector
                LIMIT 6`, [vecText]
             );
             denseLists.push(rows.map((r: any) => ({ id: r.node_id, score: Number(r.score) })));
