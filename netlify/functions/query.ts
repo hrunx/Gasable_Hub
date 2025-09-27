@@ -1,8 +1,17 @@
 // Ensure SSL but allow poolers with no-verify if configured upstream
 ;(process as any).env.PGSSLMODE = (process as any).env.PGSSLMODE || "require";
+
 import type { Handler } from "@netlify/functions";
 import OpenAI from "openai";
 import { Client } from "pg";
+
+import {
+  DEFAULT_RAG_CONFIG,
+  hybridRetrieve,
+  sanitizeAnswer,
+  formatAnswerFromHits,
+} from "./lib/rag";
+import type { HybridConfig } from "./lib/rag";
 
 type PgClient = {
   connect(): Promise<void>;
@@ -10,14 +19,16 @@ type PgClient = {
   end: () => Promise<void>;
 };
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
 
 let pgClient: PgClient | null = null;
+
 function extractProjectRef(): string {
   const supaUrl = process.env.SUPABASE_URL || "";
   const m1 = supaUrl.match(/https?:\/\/([^.]+)\.supabase\.co/i);
   if (m1) return m1[1];
-  const raw = (process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "");
+  const raw = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "";
   const m2 = raw.match(/@db\.([^.]+)\.supabase\.co/i);
   if (m2) return m2[1];
   return "";
@@ -41,7 +52,8 @@ function poolerCandidates(base: string): string[] {
 
 async function getPg(): Promise<PgClient> {
   if (pgClient) return pgClient;
-  const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL as string;
+  const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+  if (!primary) throw new Error("DATABASE_URL not set");
   const tryConnect = async (conn: string) => {
     const c = new Client({ connectionString: conn, ssl: { rejectUnauthorized: false } });
     await c.connect();
@@ -50,107 +62,104 @@ async function getPg(): Promise<PgClient> {
   };
   try {
     pgClient = await tryConnect(primary);
-  } catch (e: any) {
-    if (!/ENOTFOUND|EAI_AGAIN|self-signed certificate/i.test(String(e))) throw e;
+  } catch (err) {
+    const msg = String(err || "");
+    if (!/ENOTFOUND|EAI_AGAIN|self-signed certificate/i.test(msg)) throw err;
     for (const alt of poolerCandidates(primary)) {
-      try { pgClient = await tryConnect(alt); break; } catch(_) {}
+      try {
+        pgClient = await tryConnect(alt);
+        break;
+      } catch (_) {}
     }
-    if (!pgClient) throw e;
+    if (!pgClient) throw err;
   }
   return pgClient!;
 }
 
-const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-large";
-const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
-const SCHEMA = process.env.PG_SCHEMA || "public";
-const TABLE = process.env.PG_TABLE || "gasable_index";
-const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
-
-function sanitizeAnswer(text: string): string {
-  if (!text) return "";
-  let s = String(text);
-  s = s.replace(/<[^>]+>/g, " ");
-  s = s.replace(/https:\s+/g, "https://").replace(/http:\s+/g, "http://");
-  s = s.replace(/\s{2,}/g, " ");
-  s = s.replace(/\n{3,}/g, "\n\n");
-  return s.trim();
+function parseBody(body: string | null): any {
+  if (!body) return {};
+  try {
+    return JSON.parse(body);
+  } catch {
+    return {};
+  }
 }
 
 export const handler: Handler = async (event) => {
+  if ((event.httpMethod || "").toUpperCase() !== "POST") {
+    return { statusCode: 405, body: "POST only" };
+  }
+
+  const payload = parseBody(event.body || "");
+  const query = String(payload.q || "").trim();
+  const requestedK = Number(payload.k);
+  const withAnswer = payload.withAnswer !== false;
+  if (!query) {
+    return { statusCode: 400, body: JSON.stringify({ error: "Missing q" }) };
+  }
+
   try {
-    if (event.httpMethod !== "POST") return { statusCode: 405, body: "POST only" };
-    const { q, k = 12, withAnswer = true } = JSON.parse(event.body || "{}");
-    if (!q) return { statusCode: 400, body: "Missing q" };
-
-    // 1) Embed query
-    let vec: number[] | null = null;
-    try {
-      const emb = await openai.embeddings.create({ model: EMBED_MODEL, input: q });
-      vec = emb.data[0].embedding as number[];
-    } catch (e: any) {
-      // fallback to lexical only if embeddings fail
-      const pg = await getPg();
-      const pat = `%${q}%`;
-      const { rows } = await pg.query(
-        `SELECT node_id, left(text, 2000) AS text
-         FROM ${SCHEMA}.${TABLE}
-         WHERE text ILIKE $1
-         ORDER BY length(text) DESC
-         LIMIT $2`, [pat, k]
-      );
-      if (!withAnswer) {
-        return { statusCode: 200, body: JSON.stringify({ query: q, hits: rows }) };
-      }
-      const answerRaw = rows.map((r: any) => r.text).join("\n\n");
-      const answer = sanitizeAnswer(answerRaw);
-      return { statusCode: 200, body: JSON.stringify({ query: q, hits: rows, answer }) };
-    }
-    if (vec.length !== EMBED_DIM) {
-      console.warn(`Embedding dim mismatch: got ${vec.length}, expected ${EMBED_DIM}`);
-    }
-
-    // 2) Vector search on pgvector
     const pg = await getPg();
-    const sql = `
-      SELECT node_id, text, li_metadata,
-             1 - (embedding <=> $1::vector) AS score
-      FROM ${SCHEMA}.${TABLE}
-      ORDER BY embedding <=> $1::vector
-      LIMIT $2
-    `;
-    const vecText = `[${vec!.map((x:number)=> (Number.isFinite(x)?x:0)).join(",")}]`;
-    const { rows } = await pg.query(sql, [vecText, k]);
+    const overrides: Partial<HybridConfig> = {};
+    if (Number.isFinite(requestedK) && requestedK > 0) {
+      overrides.finalK = requestedK;
+      overrides.denseFuse = Math.max(DEFAULT_RAG_CONFIG.denseFuse, requestedK * 3);
+    }
 
-    const hits = rows.map((r: any) => ({
-      id: r.node_id,
-      score: Number(r.score),
-      text: r.text,
-      metadata: r.li_metadata
+    const ragResult = await hybridRetrieve({
+      query,
+      pg,
+      openai,
+      config: Object.keys(overrides).length ? overrides : undefined,
+    });
+
+    const hits = ragResult.selected.map(hit => ({
+      id: hit.id,
+      score: Number(hit.score || 0),
+      text: hit.text,
+      metadata: hit.metadata,
     }));
 
-    if (!withAnswer) {
-      return { statusCode: 200, body: JSON.stringify({ query: q, hits }) };
+    let answer: string | undefined;
+    if (withAnswer) {
+      if (!hits.length) {
+        answer = "No context available.";
+      } else if (openai) {
+        const context = hits.map((h, i) => `[${i + 1}] ${h.text}`).join("\n\n");
+        try {
+          const comp = await openai.chat.completions.create({
+            model: ANSWER_MODEL,
+            messages: [
+              { role: "system", content: "Output ONLY plain bullet points ('- ' prefix). 5–10 bullets max. No heading, no extra text. Keep each bullet concise. Cite sources inline with [1], [2] based on the provided bracketed context indices. If context is missing or irrelevant, output exactly: 'No context available.'" },
+              { role: "user", content: `Question: ${query}\n\nContext:\n${context}` },
+            ],
+          });
+          answer = sanitizeAnswer(comp.choices?.[0]?.message?.content || "");
+        } catch (err) {
+          console.warn("LLM answer failed, falling back to raw context", err);
+          answer = formatAnswerFromHits(ragResult.selected);
+        }
+      } else {
+        answer = formatAnswerFromHits(ragResult.selected) || "No context available.";
+      }
     }
-
-    const context = hits.map((h, i) => `[${i + 1}] ${h.text}`).join("\n\n");
-    const messages = [
-      { role: "system", content: "Output ONLY plain bullet points ('- ' prefix). 5–10 bullets max. No heading, no extra text. Keep each bullet concise. Cite sources inline with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, output exactly: 'No context available.'" },
-      { role: "user", content: `Question: ${q}\n\nContext:\n${context}` }
-    ] as any;
-    const comp = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages
-    });
 
     return {
       statusCode: 200,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query: q, hits, answer: sanitizeAnswer(comp.choices[0].message.content || "") })
+      body: JSON.stringify({
+        query,
+        hits,
+        answer,
+        meta: {
+          expansions: ragResult.expansions,
+          budgetHit: ragResult.budgetHit,
+          elapsedMs: ragResult.elapsedMs,
+        },
+      }),
     };
   } catch (err: any) {
     console.error(err);
-    return { statusCode: 500, body: JSON.stringify({ error: err.message || "error" }) };
+    return { statusCode: 500, body: JSON.stringify({ error: err?.message || "error" }) };
   }
 };
-
-
