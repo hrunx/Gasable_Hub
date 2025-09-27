@@ -334,6 +334,19 @@ function applyDomainBoost(id: string, prefer: string | null): number {
   return 0;
 }
 
+function noisePenaltyForId(id: string): number {
+  const s = String(id || "").toLowerCase();
+  let p = 0;
+  // Penalize generic market or unrelated training slides and certificates
+  if (s.includes("market_analysis") || s.includes("infrastructure market")) p += 0.35;
+  if (s.includes("project risk") || s.includes("risk management")) p += 0.5;
+  if (s.includes("certificate")) p += 0.4;
+  if (s.includes("strategic supplier evaluation")) p += 0.35;
+  // Prefer web sources when available over local file blobs
+  if (s.startsWith("file://")) p += 0.15;
+  return Math.min(0.9, p);
+}
+
 async function fetchMissing(pg: PgClient, ids: string[], cache: Map<string, DocHit>): Promise<void> {
   if (!ids.length) return;
   const unique = Array.from(new Set(ids.filter(id => id && !cache.has(id))));
@@ -519,10 +532,9 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
   }
 
   candidates.sort((a, b) => {
-    const ba = applyDomainBoost(a.id, config.preferDomainBoost);
-    const bb = applyDomainBoost(b.id, config.preferDomainBoost);
-    if (ba !== bb) return bb - ba;
-    return b.score - a.score;
+    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id);
+    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id);
+    return sb - sa;
   });
 
   let selected = simpleMMR(candidates, config.finalK, config.mmrLambda);
@@ -621,16 +633,26 @@ export function buildStructuredFromHits(query: string, hits: DocHit[], title?: s
   if (!summary.length) summary.push(truncate(top[0]?.text || "No context available."));
 
   const services: string[] = [];
+  const pricing: string[] = [];
+  const deployment: string[] = [];
+  const slas: string[] = [];
   const benefits: string[] = [];
-  const ops: string[] = [];
   const svcRe = /(charge|charger|station|install|commission|ocpp|kW|DC|AC|EV)/i;
+  const priceRe = /(price|pricing|tariff|cost|quote|vat|vat\s*invoice)/i;
+  const depRe = /(site survey|load study|design|permitting|electrical|cabling|panel|civil|commission|handover)/i;
+  const slasRe = /(sla|service level|uptime|response time|maintenance|support)/i;
   const benRe = /(efficien|cost|security|monitor|maintenance|reliab|scalab|insight|satisfaction)/i;
   for (const s of scored) {
     if (svcRe.test(s) && services.length < 6) services.push(truncate(s, 260));
+    else if (priceRe.test(s) && pricing.length < 4) pricing.push(truncate(s, 260));
+    else if (depRe.test(s) && deployment.length < 4) deployment.push(truncate(s, 260));
+    else if (slasRe.test(s) && slas.length < 4) slas.push(truncate(s, 260));
     else if (benRe.test(s) && benefits.length < 6) benefits.push(truncate(s, 260));
-    else if (ops.length < 4) ops.push(truncate(s, 260));
   }
   if (services.length) sections.push({ heading: "Services", bullets: services });
+  if (deployment.length) sections.push({ heading: "Deployment", bullets: deployment });
+  if (pricing.length) sections.push({ heading: "Pricing & Commercials", bullets: pricing });
+  if (slas.length) sections.push({ heading: "SLAs & Support", bullets: slas });
   if (benefits.length) sections.push({ heading: "Benefits", bullets: benefits });
   if (!sections.length) sections.push({ heading: "Details", paragraph: truncate(joinedText, 1200) });
 
