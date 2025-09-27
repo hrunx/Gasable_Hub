@@ -12,6 +12,7 @@ import {
   lexicalFallback,
   generateStructuredAnswer,
   structuredToHtml,
+  detectLanguage,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -109,9 +110,10 @@ export default async (req: Request): Promise<Response> => {
         const elapsedMs = Date.now() - started;
         sse(controller, "step", { step, elapsedMs, ...payload });
       };
+      const initialLanguage = detectLanguage(query);
 
       try {
-        emitStep("received_query", { lang: "en" });
+        emitStep("received_query", { lang: initialLanguage });
         const pg = await getPg();
 
         const overrides: Partial<HybridConfig> = {};
@@ -139,7 +141,7 @@ export default async (req: Request): Promise<Response> => {
           const res = await timed;
           if (res === "TIMEOUT") {
             emitStep("timeout_fallback", { budgetMs: timeLimitMs });
-            const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, null);
+            const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
             const hits = fallbackHits.map((hit, idx) => ({
               id: hit.id,
               score: Number(hit.score || 0),
@@ -155,14 +157,14 @@ export default async (req: Request): Promise<Response> => {
               answer_html: structured_html,
               structured,
               structured_html,
-              meta: { fallback: "timeout" },
+              meta: { fallback: "timeout", language: initialLanguage },
             });
             return;
           }
           ragResult = res as any;
         } catch (err) {
           console.error("stream hybridRetrieve failed, using lexical fallback", err);
-          const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, null);
+          const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
           const hits = fallbackHits.map((hit, idx) => ({
             id: hit.id,
             score: Number(hit.score || 0),
@@ -180,11 +182,12 @@ export default async (req: Request): Promise<Response> => {
             answer_html: structured_html || String(answer || "").replace(/\n/g, '<br>'),
             structured,
             structured_html,
-            meta: { fallback: "lexical" },
+            meta: { fallback: "lexical", language: initialLanguage },
           });
           return;
         }
 
+        const lang = ragResult.language;
         const hits = ragResult.selected.map((hit, idx) => ({
           id: hit.id,
           score: Number(hit.score || 0),
@@ -192,7 +195,7 @@ export default async (req: Request): Promise<Response> => {
           order: idx + 1,
         }));
 
-        emitStep("selected_context", { count: hits.length });
+        emitStep("selected_context", { count: hits.length, language: lang });
 
         let answer = "";
         const elapsedAfterRetrieve = Date.now() - started;
@@ -206,8 +209,14 @@ export default async (req: Request): Promise<Response> => {
             const comp = await openai.chat.completions.create({
               model: ANSWER_MODEL,
               messages: [
-                { role: "system", content: "Role: Senior consultant for energy and EV infrastructure. Think step-by-step to synthesize a focused answer that directly addresses the user's query, but use ONLY the provided context as facts. Be precise, structured, and actionable. Prefer short paragraphs; use bullets only for lists. If context is insufficient, reply exactly: 'No context available.'" },
-                { role: "user", content: `Question: ${query}\n\nContext:\n${context}` },
+                {
+                  role: "system",
+                  content: "You are a precise bilingual assistant for Gasable. Work strictly from the provided context. Structure the reply as: 1) customer need summary (max 2 sentences), 2) 3–6 evidence bullets with inline citations like [1], [2] matching the bracketed indices, 3) 2–4 recommended next steps. If context is insufficient, respond in the user's language with the exact phrase meaning 'No relevant context available.'",
+                },
+                {
+                  role: "user",
+                  content: `Language: ${lang}\nQuestion: ${query}\nContext:\n${context}\nRespond in the user's language following the structure above. Do not invent information beyond the context.`,
+                },
               ],
             });
             answer = sanitizeAnswer(comp.choices?.[0]?.message?.content || "");
@@ -229,6 +238,7 @@ export default async (req: Request): Promise<Response> => {
           structured,
           structured_html,
           meta: {
+            language: lang,
             expansions: ragResult.expansions,
             budgetHit: ragResult.budgetHit,
             elapsedMs: ragResult.elapsedMs,

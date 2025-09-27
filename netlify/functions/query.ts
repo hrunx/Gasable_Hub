@@ -13,6 +13,7 @@ import {
   lexicalFallback,
   generateStructuredAnswer,
   structuredToHtml,
+  detectLanguage,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -145,6 +146,7 @@ export const handler: Handler = async (event) => {
       const structured = await generateStructuredAnswer(openai, query, fallbackHits, DEFAULT_RAG_CONFIG.budgetMs);
       const structured_html = structuredToHtml(structured);
       const answer_html = answer ? String(answer).replace(/\n/g, '<br>') : undefined;
+      const language = detectLanguage(query);
       return {
         statusCode: 200,
         headers: { "content-type": "application/json" },
@@ -157,6 +159,7 @@ export const handler: Handler = async (event) => {
           structured_html,
           meta: {
             fallback: "lexical",
+            language,
           },
         }),
       };
@@ -169,6 +172,7 @@ export const handler: Handler = async (event) => {
       metadata: hit.metadata,
     }));
 
+    const lang = ragResult.language;
     let answer: string | undefined;
     if (withAnswer) {
       if (!hits.length) {
@@ -179,8 +183,14 @@ export const handler: Handler = async (event) => {
           const comp = await openai.chat.completions.create({
             model: ANSWER_MODEL,
             messages: [
-              { role: "system", content: "Role: Senior consultant for energy and EV infrastructure. Think step-by-step to synthesize a focused answer that directly addresses the user's query, but use ONLY the provided context as facts. Be precise, structured, and actionable. Prefer short paragraphs; use bullets only for lists. If context is insufficient, reply exactly: 'No context available.'" },
-              { role: "user", content: `Question: ${query}\n\nContext:\n${context}` },
+              {
+                role: "system",
+                content: "You are a precise bilingual assistant for Gasable. Work strictly from the provided context. Structure the reply as: 1) customer need summary (2 sentences max), 2) 3–6 evidence bullets with inline citations like [1], [2] referencing the bracketed context indices, 3) 2–4 recommended next steps. If context is insufficient, respond in the user's language with the exact phrase meaning 'No relevant context available.'",
+              },
+              {
+                role: "user",
+                content: `Language: ${lang}\nQuestion: ${query}\nContext:\n${context}\nRespond in the user's language with the structure described. Do not invent information beyond the context.`,
+              },
             ],
           });
           answer = sanitizeAnswer(comp.choices?.[0]?.message?.content || "");
@@ -209,6 +219,7 @@ export const handler: Handler = async (event) => {
         structured,
         structured_html,
         meta: {
+          language: ragResult.language,
           expansions: ragResult.expansions,
           budgetHit: ragResult.budgetHit,
           elapsedMs: ragResult.elapsedMs,
