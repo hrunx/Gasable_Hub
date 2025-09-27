@@ -153,6 +153,44 @@ function naiveExpansions(q: string): string[] {
     out.add(parts.map(p => p.replace(/s\b/i, "")).join(" ").trim());
     out.add(parts.map(p => (p.length > 6 ? p.slice(0, 6) : p)).join(" ").trim());
   }
+  // Domain synonyms to improve recall when OpenAI is unavailable
+  const lower = base.toLowerCase();
+  if (/\bev\b|electric\s*vehicle|charging|charger/i.test(lower)) {
+    [
+      "electric vehicle",
+      "EV charging",
+      "EV chargers",
+      "charging station",
+      "OCPP",
+      "Type 2 charger",
+    ].forEach(s => out.add(s));
+  }
+  if (/\bdelivery\b|doorstep|refuel|refueling|diesel\b/i.test(lower)) {
+    [
+      "on-demand delivery",
+      "mobile refueling",
+      "diesel delivery",
+      "doorstep delivery",
+      "fleet refueling",
+    ].forEach(s => out.add(s));
+  }
+  if (/\biot\b|sensor|meter/i.test(lower)) {
+    [
+      "IoT sensors",
+      "smart meters",
+      "LPG sensor",
+      "diesel sensor",
+      "smart electric meter",
+    ].forEach(s => out.add(s));
+  }
+  if (/gasable/i.test(lower)) {
+    [
+      "Gasable EV",
+      "Gasable IoT",
+      "Gasable delivery",
+      "Gasable services",
+    ].forEach(s => out.add(s));
+  }
   return Array.from(out).filter(Boolean);
 }
 
@@ -482,11 +520,15 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
 
   for (const exp of expansions) {
     if (nowMs() - start > config.budgetMs) { budgetHit = true; break; }
-    const tokens = String(exp || "")
+    let tokens = String(exp || "")
       .split(/\s+/)
       .map(t => t.trim())
       .filter(t => t.length > 2)
       .slice(0, 6);
+    if (isEVIntent(query)) {
+      tokens = Array.from(new Set([...tokens, "ev", "electric", "vehicle", "charging", "charger", "ocpp", "station"]))
+        .slice(0, 8);
+    }
     if (!tokens.length) continue;
     const pats = tokens.map(t => `%${t}%`);
     const conds = tokens.map((_, i) => `COALESCE(text, li_metadata->>'chunk') ILIKE $${i + 1}`).join(" OR ");
