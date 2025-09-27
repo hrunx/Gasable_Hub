@@ -179,7 +179,7 @@ export const handler: Handler = async (event) => {
           const comp = await openai.chat.completions.create({
             model: ANSWER_MODEL,
             messages: [
-              { role: "system", content: "Output ONLY plain bullet points ('- ' prefix). 5–10 bullets max. No heading, no extra text. Keep each bullet concise. Cite sources inline with [1], [2] based on the provided bracketed context indices. If context is missing or irrelevant, output exactly: 'No context available.'" },
+              { role: "system", content: "Use ONLY the provided context. If insufficient, reply exactly: 'No context available.' Return concise text with bullets only when listing items." },
               { role: "user", content: `Question: ${query}\n\nContext:\n${context}` },
             ],
           });

@@ -177,7 +177,7 @@ export default async (req: Request): Promise<Response> => {
             const comp = await openai.chat.completions.create({
               model: ANSWER_MODEL,
               messages: [
-                { role: "system", content: "Be informative but succinct. Use markdown. Begin with a short heading when appropriate (e.g., 'Gasable’s services'), then provide 5–10 clear bullet points with brief clarifications. Cite sources with [1], [2] based on the provided bracketed context indices. Use only the provided context. If context is missing or irrelevant, reply exactly: 'No context available.'" },
+                { role: "system", content: "Use ONLY the provided context. If insufficient, reply exactly: 'No context available.' Be informative but succinct. Use bullets only when listing items." },
                 { role: "user", content: `Question: ${query}\n\nContext:\n${context}` },
               ],
             });

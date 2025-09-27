@@ -57,6 +57,8 @@ const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
 const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
 const EMBED_COL = (process.env.PG_EMBED_COL || "embedding").replace(/[^a-zA-Z0-9_]/g, "");
+const STRICT_CONTEXT_ONLY = String(process.env.STRICT_CONTEXT_ONLY || "true").toLowerCase() !== "false";
+const RERANK_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
 
 const DEFAULTS: HybridConfig = {
   finalK: Number(process.env.RAG_TOP_K || 6),
@@ -602,7 +604,8 @@ export async function generateStructuredAnswer(
   budgetMs: number
 ): Promise<StructuredAnswer> {
   // Fallback immediately if LLM is unavailable or no hits
-  if (!openai || !hits?.length) return buildStructuredFromHits(query, hits || []);
+  const llm = STRICT_CONTEXT_ONLY ? null : openai;
+  if (!llm || !hits?.length) return buildStructuredFromHits(query, hits || []);
 
   const t0 = nowMs();
   const context = hits.slice(0, 8).map((h, i) => `[${i + 1}] ${truncate(h.text, 900)}`).join("\n\n");
@@ -616,7 +619,7 @@ export async function generateStructuredAnswer(
   const usr = `Question: ${query}\n\nContext:\n${context}\n\nReturn JSON with this schema (omit empty fields): ${JSON.stringify(schema)}\nRules:\n- title: short phrase.\n- summary: 4–8 crisp bullets.\n- sections: 1–3 with helpful headings, use bullets only when natural.\n- sources: map to [index] if possible using labels like "+ [1] excerpt".`;
 
   try {
-    const comp = await openai.chat.completions.create({
+    const comp = await llm.chat.completions.create({
       model: ANSWER_MODEL,
       messages: [
         { role: "system", content: sys },
@@ -646,6 +649,35 @@ export async function generateStructuredAnswer(
   } catch (err) {
     console.warn("generateStructuredAnswer fallback", err);
     return buildStructuredFromHits(query, hits);
+  }
+}
+
+async function rerankWithLLM(openai: OpenAI | null, query: string, candidates: DocHit[], budgetMs: number, tStart: number): Promise<DocHit[]> {
+  if (STRICT_CONTEXT_ONLY || !openai || !candidates?.length) return candidates;
+  try {
+    const snip = (s: string) => String(s || "").replace(/\s+/g, ' ').slice(0, 900);
+    const passages = candidates.map((h, i) => `[${i}] ${snip(h.text)}`).join("\n\n");
+    const resp = await openai.chat.completions.create({
+      model: RERANK_MODEL,
+      messages: [
+        { role: "system", content: "You are a precise reranker. Return a JSON array [{index:int, score:float}] only." },
+        { role: "user", content: `Query: ${query}\n\nPassages:\n${passages}` },
+      ],
+      temperature: 0,
+    });
+    if (nowMs() - tStart > budgetMs) return candidates;
+    const raw = resp.choices?.[0]?.message?.content || "[]";
+    const jsonText = (raw.match(/\[.*\]/s) || [raw])[0];
+    const arr = JSON.parse(jsonText);
+    const mapped = Array.isArray(arr)
+      ? arr
+          .filter((x: any) => Number.isFinite(x.index) && x.index >= 0 && x.index < candidates.length)
+          .map((x: any) => ({ ...candidates[x.index], score: Number(x.score || 0) }))
+      : candidates;
+    mapped.sort((a, b) => b.score - a.score);
+    return mapped;
+  } catch {
+    return candidates;
   }
 }
 
