@@ -342,6 +342,7 @@ function noisePenaltyForId(id: string): number {
   if (s.includes("project risk") || s.includes("risk management")) p += 0.5;
   if (s.includes("certificate")) p += 0.4;
   if (s.includes("strategic supplier evaluation")) p += 0.35;
+  if (s.includes("about us") || s.includes("our mission") || s.includes("our vision")) p += 0.3;
   // Prefer web sources when available over local file blobs
   if (s.startsWith("file://")) p += 0.15;
   return Math.min(0.9, p);
@@ -531,9 +532,17 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
     candidates = Array.from(merged.values());
   }
 
+  const deliveryTerms = ["deliver", "delivery", "doorstep", "order", "lpg", "cylinder", "diesel", "gasoline", "fuel"];
+  function intentBoost(text: string): number {
+    const t = String(text || "").toLowerCase();
+    let b = 0;
+    for (const w of deliveryTerms) if (t.includes(w)) b += 0.06;
+    return Math.min(0.3, b);
+  }
+
   candidates.sort((a, b) => {
-    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id);
-    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id);
+    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id) + intentBoost(a.text);
+    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id) + intentBoost(b.text);
     return sb - sa;
   });
 
@@ -637,7 +646,7 @@ export function buildStructuredFromHits(query: string, hits: DocHit[], title?: s
   const deployment: string[] = [];
   const slas: string[] = [];
   const benefits: string[] = [];
-  const svcRe = /(charge|charger|station|install|commission|ocpp|kW|DC|AC|EV)/i;
+  const svcRe = /(charge|charger|station|install|commission|ocpp|kW|DC|AC|EV|delivery|doorstep|order|lpg|diesel|gasoline|fuel)/i;
   const priceRe = /(price|pricing|tariff|cost|quote|vat|vat\s*invoice)/i;
   const depRe = /(site survey|load study|design|permitting|electrical|cabling|panel|civil|commission|handover)/i;
   const slasRe = /(sla|service level|uptime|response time|maintenance|support)/i;
