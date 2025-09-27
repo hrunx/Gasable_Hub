@@ -10,6 +10,8 @@ import {
   sanitizeAnswer,
   formatAnswerFromHits,
   lexicalFallback,
+  generateStructuredAnswer,
+  structuredToHtml,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -140,10 +142,15 @@ export default async (req: Request): Promise<Response> => {
           }));
           emitStep("selected_context", { count: hits.length, fallback: "lexical" });
           const answer = formatAnswerFromHits(fallbackHits) || "No context available.";
+          const structured = await generateStructuredAnswer(openai, query, fallbackHits, STREAM_BUDGET_MS);
+          const structured_html = structuredToHtml(structured);
           sse(controller, "final", {
             query,
             hits: hits.map(h => ({ id: h.id, score: h.score })),
             answer,
+            answer_html: String(answer || "").replace(/\n/g, '<br>'),
+            structured,
+            structured_html,
             meta: { fallback: "lexical" },
           });
           return;
@@ -183,10 +190,15 @@ export default async (req: Request): Promise<Response> => {
           answer = formatAnswerFromHits(ragResult.selected);
         }
 
+        const structured = await generateStructuredAnswer(openai, query, ragResult.selected, STREAM_BUDGET_MS);
+        const structured_html = structuredToHtml(structured);
         const response = {
           query,
           hits: hits.map(h => ({ id: h.id, score: h.score })),
           answer,
+          answer_html: String(answer || "").replace(/\n/g, '<br>'),
+          structured,
+          structured_html,
           meta: {
             expansions: ragResult.expansions,
             budgetHit: ragResult.budgetHit,

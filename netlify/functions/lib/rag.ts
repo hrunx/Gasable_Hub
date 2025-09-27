@@ -151,7 +151,8 @@ async function generateExpansions(
       push(fallback[out.length]);
     }
     return out.slice(0, maxExpansions);
-  } catch {
+  } catch (err) {
+    console.warn('generateExpansions fallback', err);
     return fallback.length ? fallback : [query];
   }
 }
@@ -163,7 +164,8 @@ async function embedOnce(openai: OpenAI, text: string): Promise<number[] | null>
     const emb = await openai.embeddings.create(payload);
     const vec = emb?.data?.[0]?.embedding as number[] | undefined;
     return Array.isArray(vec) && vec.length ? vec : null;
-  } catch {
+  } catch (err) {
+    console.warn('embedOnce failed', err);
     return null;
   }
 }
@@ -529,4 +531,227 @@ export function formatAnswerFromHits(hits: DocHit[]): string {
 
 export function sanitizeAnswer(text: string): string {
   return sanitizeText(text);
+}
+
+// ---------------- Structured Answer Utilities ----------------
+export interface StructuredSection {
+  heading: string;
+  bullets?: string[];
+  paragraph?: string;
+}
+
+export interface StructuredAnswer {
+  title: string;
+  summary: string[]; // short bullets
+  sections: StructuredSection[];
+  sources: Array<{ id: string; label?: string }>;
+}
+
+function truncate(text: string, maxLen = 800): string {
+  const s = sanitizeText(text);
+  return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
+}
+
+export function buildStructuredFromHits(query: string, hits: DocHit[], title?: string): StructuredAnswer {
+  const top = hits.slice(0, 6);
+  const summary: string[] = [];
+  const sections: StructuredSection[] = [];
+  const sources = top.map(h => ({ id: h.id }));
+  const titleText = title || truncate(query, 140);
+
+  // Naive extraction: take first lines as bullets
+  const joined = formatAnswerFromHits(top).split(/\n+/).filter(Boolean);
+  joined.slice(0, 6).forEach(line => {
+    const s = line.replace(/^[-•\u2022\s]+/, "").trim();
+    if (s) summary.push(s);
+  });
+
+  if (!summary.length) {
+    summary.push(truncate(top[0]?.text || "No context available."));
+  }
+
+  sections.push({ heading: "Details", paragraph: truncate(joined.join(" \n"), 1200) });
+
+  return { title: titleText, summary, sections, sources };
+}
+
+export function structuredToHtml(ans: StructuredAnswer): string {
+  const esc = (s: string) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const parts: string[] = [];
+  if (ans.title) parts.push(`<h3>${esc(ans.title)}</h3>`);
+  if (ans.summary?.length) {
+    parts.push("<ul>" + ans.summary.map(b => `<li>${esc(b)}</li>`).join("") + "</ul>");
+  }
+  for (const sec of ans.sections || []) {
+    if (sec.heading) parts.push(`<h4>${esc(sec.heading)}</h4>`);
+    if (sec.paragraph) parts.push(`<p>${esc(sec.paragraph)}</p>`);
+    if (sec.bullets?.length) parts.push("<ul>" + sec.bullets.map(b => `<li>${esc(b)}</li>`).join("") + "</ul>");
+  }
+  if (ans.sources?.length) {
+    parts.push('<div class="sources"><b>Sources:</b> ' + ans.sources.map(s => esc(s.label || s.id)).join("; ") + "</div>");
+  }
+  return parts.join("\n");
+}
+
+const ANSWER_MODEL = process.env.ANSWER_MODEL || process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+
+export async function generateStructuredAnswer(
+  openai: OpenAI | null,
+  query: string,
+  hits: DocHit[],
+  budgetMs: number
+): Promise<StructuredAnswer> {
+  // Fallback immediately if LLM is unavailable or no hits
+  if (!openai || !hits?.length) return buildStructuredFromHits(query, hits || []);
+
+  const t0 = nowMs();
+  const context = hits.slice(0, 8).map((h, i) => `[${i + 1}] ${truncate(h.text, 900)}`).join("\n\n");
+  const schema = {
+    title: "string",
+    summary: ["string"],
+    sections: [{ heading: "string", bullets: ["string"], paragraph: "string" }],
+    sources: [{ id: "string", label: "string" }],
+  };
+  const sys = "You return ONLY strict JSON for a structured answer. No prose, no markdown, no code fences. Keep it concise and well-organized. Use bullets only for lists.";
+  const usr = `Question: ${query}\n\nContext:\n${context}\n\nReturn JSON with this schema (omit empty fields): ${JSON.stringify(schema)}\nRules:\n- title: short phrase.\n- summary: 4–8 crisp bullets.\n- sections: 1–3 with helpful headings, use bullets only when natural.\n- sources: map to [index] if possible using labels like "+ [1] excerpt".`;
+
+  try {
+    const comp = await openai.chat.completions.create({
+      model: ANSWER_MODEL,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: usr },
+      ],
+      temperature: 0.2,
+    });
+    if (nowMs() - t0 > budgetMs) return buildStructuredFromHits(query, hits);
+    const raw = comp.choices?.[0]?.message?.content || "{}";
+    const jsonText = (raw.match(/\{[\s\S]*\}/) || [raw])[0];
+    const parsed = JSON.parse(jsonText);
+    // Minimal validation
+    const title = truncate(parsed.title || query, 140);
+    const summary = Array.isArray(parsed.summary) ? parsed.summary.map((s: any) => truncate(String(s || ""), 260)).filter(Boolean) : [];
+    const sections: StructuredSection[] = Array.isArray(parsed.sections)
+      ? parsed.sections.map((sec: any) => ({
+          heading: truncate(String(sec?.heading || ""), 120),
+          bullets: Array.isArray(sec?.bullets) ? sec.bullets.map((b: any) => truncate(String(b || ""), 260)).filter(Boolean) : undefined,
+          paragraph: sec?.paragraph ? truncate(String(sec.paragraph || ""), 1200) : undefined,
+        })).filter((s: any) => s.heading || (s.bullets && s.bullets.length) || s.paragraph)
+      : [];
+    const sources = Array.isArray(parsed.sources)
+      ? parsed.sources.map((s: any) => ({ id: String(s?.id || ""), label: s?.label ? truncate(String(s.label), 260) : undefined })).filter((s: any) => s.id)
+      : hits.slice(0, 6).map(h => ({ id: h.id }));
+
+    return { title, summary: summary.slice(0, 8), sections: sections.slice(0, 4), sources };
+  } catch (err) {
+    console.warn("generateStructuredAnswer fallback", err);
+    return buildStructuredFromHits(query, hits);
+  }
+}
+
+export async function lexicalFallback(
+  pg: PgClient,
+  query: string,
+  limit: number,
+  preferDomain: string | null
+): Promise<DocHit[]> {
+  const tokens = String(query || "")
+    .split(/\s+/)
+    .map(t => t.trim())
+    .filter(t => t.length >= 2)
+    .slice(0, 8);
+  const scoreExpr = tokens
+    .map((_, idx) => `CASE WHEN COALESCE(text, li_metadata->>'chunk') ILIKE $${idx + 1} THEN 1 ELSE 0 END`)
+    .join(' + ') || '0';
+  const params = tokens.map(t => `%${t}%`);
+  const cap = Math.max(1, Math.min(limit || DEFAULTS.finalK, 24));
+
+  const preferLike = preferDomain ? `${preferDomain}%` : null;
+
+  const runQuery = async (extraCond?: string, extraParam?: string) => {
+    let sql = `
+      SELECT node_id,
+             left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
+             li_metadata,
+             (${scoreExpr}) AS score_calc
+      FROM ${SCHEMA}.${TABLE}
+    `;
+    const values: any[] = params.slice();
+    if (extraCond && extraParam) {
+      sql += `WHERE ${extraCond}\n`;
+      values.push(extraParam);
+    }
+    sql += `ORDER BY score_calc DESC, length(COALESCE(text, li_metadata->>'chunk')) DESC LIMIT $${values.length + 1}`;
+    values.push(cap);
+    const { rows } = await pg.query(sql, values);
+    return rows.map((r: any) => ({
+      id: r.node_id,
+      score: Number(r.score_calc || 0),
+      text: sanitizeText(r.text || ""),
+      metadata: r.li_metadata,
+    }));
+  };
+
+  try {
+    if (preferLike) {
+      const preferHits = await runQuery(`node_id LIKE $${params.length + 1}`, preferLike);
+      if (preferHits.length) return preferHits;
+    }
+  } catch (err) {
+    console.warn('lexicalFallback prefer domain failed', err);
+  }
+
+  try {
+    const hits = await runQuery();
+    if (hits.length) return hits;
+  } catch (err) {
+    console.warn('lexicalFallback base query failed', err);
+  }
+
+  // As a last resort use trigram similarity if available
+  try {
+    const like = preferLike || '%';
+    const sql = `
+      SELECT node_id,
+             left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
+             li_metadata,
+             similarity(COALESCE(text, li_metadata->>'chunk'), $2) AS sim
+      FROM ${SCHEMA}.${TABLE}
+      WHERE node_id LIKE $1 AND COALESCE(text, li_metadata->>'chunk') % $2
+      ORDER BY sim DESC
+      LIMIT $3`;
+    const { rows } = await pg.query(sql, [like, query, cap]);
+    if (rows.length) {
+      return rows.map((r: any) => ({
+        id: r.node_id,
+        score: Number(r.sim || 0),
+        text: sanitizeText(r.text || ""),
+        metadata: r.li_metadata,
+      }));
+    }
+  } catch (err) {
+    console.warn('lexicalFallback trigram failed', err);
+  }
+
+  try {
+    const sql = `
+      SELECT node_id,
+             left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
+             li_metadata
+      FROM ${SCHEMA}.${TABLE}
+      WHERE COALESCE(text, li_metadata->>'chunk') % $1
+      ORDER BY similarity(COALESCE(text, li_metadata->>'chunk'), $1) DESC
+      LIMIT $2`;
+    const { rows } = await pg.query(sql, [query, cap]);
+    return rows.map((r: any) => ({
+      id: r.node_id,
+      score: 0,
+      text: sanitizeText(r.text || ""),
+      metadata: r.li_metadata,
+    }));
+  } catch (err) {
+    console.warn('lexicalFallback final similarity failed', err);
+  }
+
+  return [];
 }

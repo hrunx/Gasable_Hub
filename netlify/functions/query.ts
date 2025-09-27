@@ -11,6 +11,8 @@ import {
   sanitizeAnswer,
   formatAnswerFromHits,
   lexicalFallback,
+  generateStructuredAnswer,
+  structuredToHtml,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -140,6 +142,9 @@ export const handler: Handler = async (event) => {
         metadata: hit.metadata,
       }));
       const answer = withAnswer ? (formatAnswerFromHits(fallbackHits) || "No context available.") : undefined;
+      const structured = await generateStructuredAnswer(openai, query, fallbackHits, DEFAULT_RAG_CONFIG.budgetMs);
+      const structured_html = structuredToHtml(structured);
+      const answer_html = answer ? String(answer).replace(/\n/g, '<br>') : undefined;
       return {
         statusCode: 200,
         headers: { "content-type": "application/json" },
@@ -147,6 +152,9 @@ export const handler: Handler = async (event) => {
           query,
           hits,
           answer,
+          answer_html,
+          structured,
+          structured_html,
           meta: {
             fallback: "lexical",
           },
@@ -185,6 +193,11 @@ export const handler: Handler = async (event) => {
       }
     }
 
+    // Structured answer (always attempt, falls back internally)
+    const structured = await generateStructuredAnswer(openai, query, ragResult.selected, DEFAULT_RAG_CONFIG.budgetMs);
+    const structured_html = structuredToHtml(structured);
+    const answer_html = answer ? String(answer).replace(/\n/g, '<br>') : undefined;
+
     return {
       statusCode: 200,
       headers: { "content-type": "application/json" },
@@ -192,6 +205,9 @@ export const handler: Handler = async (event) => {
         query,
         hits,
         answer,
+        answer_html,
+        structured,
+        structured_html,
         meta: {
           expansions: ragResult.expansions,
           budgetHit: ragResult.budgetHit,
