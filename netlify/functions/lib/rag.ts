@@ -59,6 +59,7 @@ const TABLE = process.env.PG_TABLE || "gasable_index";
 const EMBED_COL = (process.env.PG_EMBED_COL || "embedding").replace(/[^a-zA-Z0-9_]/g, "");
 const STRICT_CONTEXT_ONLY = String(process.env.STRICT_CONTEXT_ONLY || "true").toLowerCase() !== "false";
 const RERANK_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+const USE_HNSW = String(process.env.RAG_USE_HNSW || "false").toLowerCase() === "true";
 
 const DEFAULTS: HybridConfig = {
   finalK: Number(process.env.RAG_TOP_K || 6),
@@ -344,6 +345,20 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
   const { query, pg, openai, reporter } = options;
   const config = { ...DEFAULTS, ...(options.config || {}) };
   const start = nowMs();
+  // Optional: create HNSW index to accelerate dense search (cosine)
+  // Safe to call repeatedly; IF NOT EXISTS guards re-creation
+  // This improves latency/scale but does not alter ranking logic
+  if (USE_HNSW) {
+    try {
+      const vecCol = EMBED_DIM === 1536 ? (process.env.PG_EMBED_COL || "embedding_1536") : (process.env.PG_EMBED_COL || "embedding");
+      await pg.query(
+        `CREATE INDEX IF NOT EXISTS gasable_${vecCol}_hnsw ON ${SCHEMA}.${TABLE}
+         USING hnsw (${vecCol} vector_cosine_ops) WITH (m=16, ef_construction=64)`
+      );
+    } catch {
+      // ignore index creation errors
+    }
+  }
   const expansions = await generateExpansions(openai, query, Math.max(1, config.expansions), config.budgetMs);
   reporter?.("expansions", { count: expansions.length, expansions });
 

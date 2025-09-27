@@ -179,7 +179,7 @@ export const handler: Handler = async (event) => {
           const comp = await openai.chat.completions.create({
             model: ANSWER_MODEL,
             messages: [
-              { role: "system", content: "Use ONLY the provided context. If insufficient, reply exactly: 'No context available.' Return concise text with bullets only when listing items." },
+              { role: "system", content: "Role: Senior consultant for energy and EV infrastructure. Use ONLY the provided context. Be precise, structured, and actionable. Prefer short paragraphs; use bullets only for lists. If context is insufficient, reply exactly: 'No context available.'" },
               { role: "user", content: `Question: ${query}\n\nContext:\n${context}` },
             ],
           });
