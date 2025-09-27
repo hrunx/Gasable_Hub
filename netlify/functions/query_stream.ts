@@ -9,6 +9,7 @@ import {
   hybridRetrieve,
   sanitizeAnswer,
   formatAnswerFromHits,
+  lexicalFallback,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -51,9 +52,21 @@ function poolerCandidates(base: string): string[] {
   }
 }
 
+// Ensure DSN opts out of TLS verification on platforms where CA bundles cause failures
+function withNoVerify(dsn: string): string {
+  try {
+    const u = new URL(dsn.replace("postgres://", "postgresql://"));
+    u.searchParams.set("sslmode", "no-verify");
+    return u.toString();
+  } catch {
+    return dsn + (dsn.includes("?") ? "&" : "?") + "sslmode=no-verify";
+  }
+}
+
 async function getPg(): Promise<PgClient> {
   if (pgClient) return pgClient;
-  const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+  const raw = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+  const primary = raw ? withNoVerify(raw) : "";
   if (!primary) throw new Error("DATABASE_URL not set");
   const tryConnect = async (conn: string) => {
     const c = new Client({ connectionString: conn, ssl: { rejectUnauthorized: false } });
@@ -105,13 +118,36 @@ export default async (req: Request): Promise<Response> => {
           overrides.denseFuse = Math.max(DEFAULT_RAG_CONFIG.denseFuse, STREAM_TOP_K * 3);
         }
 
-        const ragResult = await hybridRetrieve({
-          query,
-          pg,
-          openai,
-          reporter: (step, payload) => emitStep(step, payload),
-          config: Object.keys(overrides).length ? overrides : undefined,
-        });
+        const effectiveFinalK = overrides.finalK || DEFAULT_RAG_CONFIG.finalK;
+
+        let ragResult;
+        try {
+          ragResult = await hybridRetrieve({
+            query,
+            pg,
+            openai,
+            reporter: (step, payload) => emitStep(step, payload),
+            config: Object.keys(overrides).length ? overrides : undefined,
+          });
+        } catch (err) {
+          console.error("stream hybridRetrieve failed, using lexical fallback", err);
+          const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+          const hits = fallbackHits.map((hit, idx) => ({
+            id: hit.id,
+            score: Number(hit.score || 0),
+            text: hit.text,
+            order: idx + 1,
+          }));
+          emitStep("selected_context", { count: hits.length, fallback: "lexical" });
+          const answer = formatAnswerFromHits(fallbackHits) || "No context available.";
+          sse(controller, "final", {
+            query,
+            hits: hits.map(h => ({ id: h.id, score: h.score })),
+            answer,
+            meta: { fallback: "lexical" },
+          });
+          return;
+        }
 
         const hits = ragResult.selected.map((hit, idx) => ({
           id: hit.id,

@@ -10,6 +10,7 @@ import {
   hybridRetrieve,
   sanitizeAnswer,
   formatAnswerFromHits,
+  lexicalFallback,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -50,9 +51,22 @@ function poolerCandidates(base: string): string[] {
   }
 }
 
+// Ensure DSN opts out of TLS verification on platforms where CA bundles cause failures
+function withNoVerify(dsn: string): string {
+  try {
+    const u = new URL(dsn.replace("postgres://", "postgresql://"));
+    // Keep existing params but enforce no-verify for compatibility with Netlify builds
+    u.searchParams.set("sslmode", "no-verify");
+    return u.toString();
+  } catch {
+    return dsn + (dsn.includes("?") ? "&" : "?") + "sslmode=no-verify";
+  }
+}
+
 async function getPg(): Promise<PgClient> {
   if (pgClient) return pgClient;
-  const primary = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+  const raw = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+  const primary = raw ? withNoVerify(raw) : undefined;
   if (!primary) throw new Error("DATABASE_URL not set");
   const tryConnect = async (conn: string) => {
     const c = new Client({ connectionString: conn, ssl: { rejectUnauthorized: false } });
@@ -106,12 +120,39 @@ export const handler: Handler = async (event) => {
       overrides.denseFuse = Math.max(DEFAULT_RAG_CONFIG.denseFuse, requestedK * 3);
     }
 
-    const ragResult = await hybridRetrieve({
-      query,
-      pg,
-      openai,
-      config: Object.keys(overrides).length ? overrides : undefined,
-    });
+    const effectiveFinalK = overrides.finalK || DEFAULT_RAG_CONFIG.finalK;
+
+    let ragResult;
+    try {
+      ragResult = await hybridRetrieve({
+        query,
+        pg,
+        openai,
+        config: Object.keys(overrides).length ? overrides : undefined,
+      });
+    } catch (err) {
+      console.error("hybridRetrieve failed, using lexical fallback", err);
+      const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+      const hits = fallbackHits.map(hit => ({
+        id: hit.id,
+        score: Number(hit.score || 0),
+        text: hit.text,
+        metadata: hit.metadata,
+      }));
+      const answer = withAnswer ? (formatAnswerFromHits(fallbackHits) || "No context available.") : undefined;
+      return {
+        statusCode: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          query,
+          hits,
+          answer,
+          meta: {
+            fallback: "lexical",
+          },
+        }),
+      };
+    }
 
     const hits = ragResult.selected.map(hit => ({
       id: hit.id,
