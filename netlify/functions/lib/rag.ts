@@ -93,6 +93,7 @@ function sanitizeText(text: string): string {
   s = s.replace(/https:\s+/g, "https://").replace(/http:\s+/g, "http://");
   s = s.replace(/\s{2,}/g, " ");
   s = s.replace(/\n{3,}/g, "\n\n");
+  s = s.replace(/^\s*(Our\s+(Mission|Vision|Story)|Gasable\s+in\s+Figures).*$/gmi, "");
   s = s
     .split(/\n+/)
     .map(line => {
@@ -541,14 +542,25 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
     for (const w of deliveryTerms) if (t.includes(w)) b += 0.06;
     return Math.min(0.3, b);
   }
+  function overlapBoost(text: string, q: string): number {
+    const toks = new Set(String(text || "").toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
+    const qtok = new Set(String(q || "").toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
+    if (!toks.size || !qtok.size) return 0;
+    let inter = 0;
+    for (const t of toks) if (qtok.has(t)) inter += 1;
+    const ratio = inter / Math.max(1, qtok.size);
+    return Math.min(0.5, ratio * 0.5);
+  }
 
   candidates.sort((a, b) => {
-    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id) + intentBoost(a.text);
-    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id) + intentBoost(b.text);
+    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id) + intentBoost(a.text) + overlapBoost(a.text, query);
+    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id) + intentBoost(b.text) + overlapBoost(b.text, query);
     return sb - sa;
   });
 
-  let selected = simpleMMR(candidates, config.finalK, config.mmrLambda);
+  // Optional LLM rerank before MMR selection
+  let reranked = await rerankWithLLM(openai, query, candidates, config.budgetMs, start);
+  let selected = simpleMMR(reranked, config.finalK, config.mmrLambda);
   if (!selected.length) {
     selected = candidates.slice(0, config.finalK);
   }
