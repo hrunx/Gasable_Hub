@@ -404,8 +404,9 @@ async function keywordPrefilter(
 
 function applyDomainBoost(id: string, prefer: string | null): number {
   if (!prefer) return 0;
-  if (id.startsWith(prefer)) return 1;
-  if (prefer.startsWith("web://") && id.startsWith("web://")) return 0.5;
+  // Reduce domain boost weight to avoid overshadowing EV intent
+  if (id.startsWith(prefer)) return 0.5;
+  if (prefer.startsWith("web://") && id.startsWith("web://")) return 0.25;
   return 0;
 }
 
@@ -421,7 +422,16 @@ function noisePenaltyForId(id: string): number {
   if (s.includes("gmail") || s.includes("mail-") || s.includes("proposal")) p += 0.5;
   if (s.includes("ssms") || s.includes("incident") || s.includes("audit")) p += 0.4;
   // Prefer web sources when available over local file blobs
-  if (s.startsWith("file://")) p += 0.15;
+  if (s.startsWith("file://")) p += 0.05;
+  return Math.min(0.9, p);
+}
+
+function noisePenaltyForText(text: string): number {
+  const t = String(text || "").toLowerCase();
+  let p = 0;
+  if (/(join\s*now|request\s*a\s*quote|contribution\s*to\s*a\s*sustainable\s*environment)/i.test(t)) p += 0.5;
+  if (/(dear|regards|gmail|quoted\s*text\s*hidden)/i.test(t)) p += 0.5;
+  if (/(incident|audit|nonconformity|corrective\s*action|ssms)/i.test(t)) p += 0.4;
   return Math.min(0.9, p);
 }
 
@@ -513,6 +523,32 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
         if (list.length) denseLists.push(list);
       } catch {
         // ignore individual failures
+      }
+      // Also query embeddings table if available, mirroring webapp.py behavior
+      try {
+        const { rows } = await pg.query(
+          `SELECT ('embeddings:' || id::text) AS node_id,
+                  left(COALESCE(chunk_text,''), 2000) AS text,
+                  1.0 / (1.0 + (embedding <-> $1::vector)) AS score
+           FROM public.embeddings
+           ORDER BY (embedding <-> $1::vector) ASC
+           LIMIT $2`,
+          [vecText, config.denseK]
+        );
+        const list2: Array<{ id: string; score: number }> = [];
+        rows.forEach((r: any) => {
+          const hit: DocHit = {
+            id: r.node_id,
+            score: Number(r.score || 0),
+            text: sanitizeText(r.text || ""),
+            metadata: undefined,
+          };
+          if (!all.has(hit.id)) all.set(hit.id, hit);
+          list2.push({ id: hit.id, score: hit.score });
+        });
+        if (list2.length) denseLists.push(list2);
+      } catch {
+        // embeddings table may not exist; ignore
       }
     }
   }
@@ -626,6 +662,16 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
     const t = String(q || "").toLowerCase();
     return evTerms.some(w => t.includes(w));
   }
+  function idOverlapBoost(id: string, q: string): number {
+    const t = String(id || "").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+    const qt = String(q || "").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+    let b = 0;
+    for (const w of qt.split(/\s+/)) if (w && t.includes(w)) b += 0.03;
+    for (const w of evTerms) if (t.includes(w)) b += 0.05;
+    // Prefer obvious EV sources in filenames
+    if (/sales\s*pitch|ev\s*infrastructure|evchargingsystems|evcs|charger|charging/.test(t)) b += 0.15;
+    return Math.min(0.4, b);
+  }
   function intentBoost(text: string): number {
     const t = String(text || "").toLowerCase();
     let b = 0;
@@ -652,10 +698,25 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
 
   const evIntent = isEVIntent(query);
   candidates.sort((a, b) => {
-    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id) + intentBoost(a.text) + overlapBoost(a.text, query) + evBoost(a.text, a.id, evIntent);
-    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id) + intentBoost(b.text) + overlapBoost(b.text, query) + evBoost(b.text, b.id, evIntent);
+    const domainBoostA = evIntent ? 0 : applyDomainBoost(a.id, config.preferDomainBoost);
+    const domainBoostB = evIntent ? 0 : applyDomainBoost(b.id, config.preferDomainBoost);
+    const sa = a.score + domainBoostA - noisePenaltyForId(a.id) - noisePenaltyForText(a.text) + intentBoost(a.text) + overlapBoost(a.text, query) + evBoost(a.text, a.id, evIntent) + idOverlapBoost(a.id, query);
+    const sb = b.score + domainBoostB - noisePenaltyForId(b.id) - noisePenaltyForText(b.text) + intentBoost(b.text) + overlapBoost(b.text, query) + evBoost(b.text, b.id, evIntent) + idOverlapBoost(b.id, query);
     return sb - sa;
   });
+
+  // Filter out low-overlap/noisy candidates to reduce irrelevant emails/policies
+  const qtok = new Set(String(query || "").toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
+  function tokenOverlap(text: string): number {
+    const toks = new Set(String(text || "").toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
+    let inter = 0; for (const t of toks) if (qtok.has(t)) inter += 1; return inter;
+  }
+  const filtered = candidates.filter(c => {
+    const inter = tokenOverlap(c.text);
+    if (evIntent) return inter >= 2 || /\bev\b|charger|charging|ocpp|station|kW/i.test(c.text) || /ev|charger|charging|evcs|sales.*pitch/i.test(String(c.id||""));
+    return inter >= 1;
+  });
+  if (filtered.length >= Math.max(4, config.finalK)) candidates = filtered;
 
   // Optional LLM rerank before MMR selection
   let reranked = await rerankWithLLM(openai, query, candidates, config.budgetMs, start);

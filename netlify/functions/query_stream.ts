@@ -128,7 +128,8 @@ export default async (req: Request): Promise<Response> => {
 
         let ragResult;
         try {
-          const timeLimitMs = Math.max(2000, Math.min(STREAM_BUDGET_MS + 2000, 11000));
+          // Allow a bit more budget to let dense+lexical finish, similar to webapp.py
+          const timeLimitMs = Math.max(4000, Math.min(STREAM_BUDGET_MS + 3500, 15000));
           const retrieval = hybridRetrieve({
             query,
             pg,
