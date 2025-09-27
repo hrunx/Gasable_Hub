@@ -12,7 +12,6 @@ import {
   lexicalFallback,
   generateStructuredAnswer,
   structuredToHtml,
-  detectLanguage,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -110,7 +109,10 @@ export default async (req: Request): Promise<Response> => {
         const elapsedMs = Date.now() - started;
         sse(controller, "step", { step, elapsedMs, ...payload });
       };
-      const initialLanguage = detectLanguage(query);
+      const AR = /[\u0600-\u06FF]/;
+      const hasAr = AR.test(query);
+      const hasEn = /[A-Za-z]/.test(query);
+      const initialLanguage = hasAr && hasEn ? "mixed" : (hasAr ? "ar" : "en");
 
       try {
         emitStep("received_query", { lang: initialLanguage });
