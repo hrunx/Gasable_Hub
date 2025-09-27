@@ -82,7 +82,24 @@
           out.scrollTop = out.scrollHeight;
         }
       });
-      es.onerror = () => { appendStream('stream error', 'error'); es.close(); };
+      es.onerror = async () => {
+        appendStream('stream error', 'error');
+        try { es.close(); } catch {}
+        // Fallback: single-shot HTTP
+        try {
+          const resp = await fetch('/.netlify/functions/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: query, k: 8, withAnswer: true })
+          });
+          const data = await resp.json();
+          const html = String(data.answer_html || (data.answer||'').replace(/\n/g,'<br>'));
+          out.innerHTML += `<div class="bot">${html}</div>`;
+        } catch (e) {
+          out.innerHTML += `<div class="bot">${String(e)}</div>`;
+        }
+        out.scrollTop = out.scrollHeight;
+      };
     } else {
       // Local FastAPI streaming SSE
       const ssePath = '/api/query_stream';
@@ -112,7 +129,24 @@
           out.scrollTop = out.scrollHeight;
         }
       });
-      es.onerror = () => { appendStream('stream error', 'error'); es.close(); };
+      es.onerror = async () => {
+        appendStream('stream error', 'error');
+        try { es.close(); } catch {}
+        // Fallback to local single-shot if available
+        try {
+          const resp = await fetch('/api/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: query, k: 8, withAnswer: true })
+          });
+          const data = await resp.json();
+          const html = String(data.answer_html || (data.answer||'').replace(/\n/g,'<br>'));
+          out.innerHTML += `<div class="bot">${html}</div>`;
+        } catch (e) {
+          out.innerHTML += `<div class="bot">${String(e)}</div>`;
+        }
+        out.scrollTop = out.scrollHeight;
+      };
     }
   });
   </script>
