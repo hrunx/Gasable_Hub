@@ -1,9 +1,8 @@
 import { Handler } from "@netlify/functions";
 import OpenAI from "openai";
 import { Client as PgClientRaw } from "pg";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-
+// Note: SDK is installed; for Netlify we implement a minimal JSON-RPC over HTTP
+// and can switch to StreamableHTTPServerTransport when native req/res are available.
 import {
   DEFAULT_RAG_CONFIG,
   hybridRetrieve,
@@ -20,30 +19,55 @@ type PgClient = {
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
+function withNoVerify(dsn: string): string {
+  try {
+    const u = new URL(dsn.replace("postgres://", "postgresql://"));
+    u.searchParams.set("sslmode", "no-verify");
+    return u.toString();
+  } catch {
+    return dsn + (dsn.includes("?") ? "&" : "?") + "sslmode=no-verify";
+  }
+}
+
 async function getPg(): Promise<PgClient> {
-  const dsn = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "";
-  if (!dsn) throw new Error("DATABASE_URL not set");
+  const raw = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "";
+  if (!raw) throw new Error("DATABASE_URL not set");
+  const dsn = withNoVerify(raw);
   const c = new PgClientRaw({ connectionString: dsn, ssl: { rejectUnauthorized: false } });
   await c.connect();
   return c as unknown as PgClient;
 }
 
 export const handler: Handler = async (event) => {
-  // Streamable HTTP transport over Netlify Request/Response
-  const server = new McpServer({ name: "gasable-mcp", version: "1.0.0" });
+  // Minimal JSON-RPC 2.0 over HTTP to interop with MCP tools/call and tools/list
+  try {
+    const body = event.body ? JSON.parse(event.body) : {};
+    const id = body.id ?? null;
+    const method = body.method || "";
+    const params = body.params || {};
 
-  // Tools
-  server.tool("vector.query", {
-    description: "Hybrid RAG query against Gasable index. Returns hits and structured answer.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        q: { type: "string" },
-        k: { type: "number" },
-      },
-      required: ["q"],
-    },
-    handler: async ({ q, k }) => {
+    const json = async (result: any) => ({ statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id, result }) });
+    const error = async (code: number, message: string) => ({ statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }) });
+
+    if (method === "tools/list") {
+      return json({
+        tools: [
+          {
+            name: "vector.query",
+            description: "Hybrid RAG query against Gasable index. Returns hits and structured answer.",
+            inputSchema: { type: "object", properties: { q: { type: "string" }, k: { type: "number" } }, required: ["q"] },
+          },
+        ],
+      });
+    }
+
+    if (method === "tools/call") {
+      const name = params.name;
+      const args = params.arguments || {};
+      if (name !== "vector.query") return error(-32601, `Unknown tool: ${name}`);
+      const q = String(args.q || "");
+      const k = Number(args.k || 0);
+      if (!q) return error(-32602, "Missing q");
       const pg = await getPg();
       try {
         const overrides: Partial<any> = {};
@@ -51,32 +75,25 @@ export const handler: Handler = async (event) => {
           overrides.finalK = k;
           overrides.denseFuse = Math.max(DEFAULT_RAG_CONFIG.denseFuse, Number(k) * 3);
         }
-        let result;
         try {
-          result = await hybridRetrieve({ query: q, pg, openai, config: overrides });
-        } catch {
+          const result = await hybridRetrieve({ query: q, pg, openai, config: overrides });
+          const hits = result.selected;
+          const structured = await generateStructuredAnswer(openai, q, hits, DEFAULT_RAG_CONFIG.budgetMs);
+          return json({ content: [{ type: "json", json: { query: q, hits, structured, structured_html: structuredToHtml(structured), meta: { expansions: result.expansions, budgetHit: result.budgetHit, elapsedMs: result.elapsedMs } } }] });
+        } catch (e) {
           const fallback = await lexicalFallback(pg, q, overrides.finalK || DEFAULT_RAG_CONFIG.finalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
           const structured = await generateStructuredAnswer(openai, q, fallback, DEFAULT_RAG_CONFIG.budgetMs);
-          return {
-            content: [{ type: "json", json: { query: q, hits: fallback, structured, structured_html: structuredToHtml(structured), meta: { fallback: "lexical" } } }],
-          };
+          return json({ content: [{ type: "json", json: { query: q, hits: fallback, structured, structured_html: structuredToHtml(structured), meta: { fallback: "lexical" } } }] });
         }
-        const hits = result.selected;
-        const structured = await generateStructuredAnswer(openai, q, hits, DEFAULT_RAG_CONFIG.budgetMs);
-        return {
-          content: [{ type: "json", json: { query: q, hits, structured, structured_html: structuredToHtml(structured), meta: { expansions: result.expansions, budgetHit: result.budgetHit, elapsedMs: result.elapsedMs } } }],
-        };
       } finally {
         try { await pg.end(); } catch {}
       }
-    },
-  });
+    }
 
-  // Wire transport
-  const transport = new StreamableHTTPServerTransport(event as any);
-  await server.connect(transport);
-  const response = await transport.finalize();
-  return response as any;
+    return error(-32601, "Method not found");
+  } catch (e: any) {
+    return { statusCode: 500, body: String(e?.message || e) };
+  }
 };
 
 
