@@ -13,7 +13,6 @@ import {
   lexicalFallback,
   generateStructuredAnswer,
   structuredToHtml,
-  detectLanguage,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -146,7 +145,10 @@ export const handler: Handler = async (event) => {
       const structured = await generateStructuredAnswer(openai, query, fallbackHits, DEFAULT_RAG_CONFIG.budgetMs);
       const structured_html = structuredToHtml(structured);
       const answer_html = answer ? String(answer).replace(/\n/g, '<br>') : undefined;
-      const language = detectLanguage(query);
+      const AR = /[\u0600-\u06FF]/;
+      const hasAr = AR.test(query);
+      const hasEn = /[A-Za-z]/.test(query);
+      const language = hasAr && hasEn ? "mixed" : (hasAr ? "ar" : "en");
       return {
         statusCode: 200,
         headers: { "content-type": "application/json" },
