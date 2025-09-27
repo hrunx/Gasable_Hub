@@ -206,7 +206,7 @@ export default async (req: Request): Promise<Response> => {
             const comp = await openai.chat.completions.create({
               model: ANSWER_MODEL,
               messages: [
-                { role: "system", content: "Role: Senior consultant for energy and EV infrastructure. Use ONLY the provided context. Be precise, structured, and actionable. Prefer short paragraphs; use bullets only for lists. If context is insufficient, reply exactly: 'No context available.'" },
+                { role: "system", content: "Role: Senior consultant for energy and EV infrastructure. Think step-by-step to synthesize a focused answer that directly addresses the user's query, but use ONLY the provided context as facts. Be precise, structured, and actionable. Prefer short paragraphs; use bullets only for lists. If context is insufficient, reply exactly: 'No context available.'" },
                 { role: "user", content: `Question: ${query}\n\nContext:\n${context}` },
               ],
             });

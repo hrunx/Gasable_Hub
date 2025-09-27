@@ -57,7 +57,9 @@ const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
 const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
 const EMBED_COL = (process.env.PG_EMBED_COL || "embedding").replace(/[^a-zA-Z0-9_]/g, "");
-const STRICT_CONTEXT_ONLY = String(process.env.STRICT_CONTEXT_ONLY || "true").toLowerCase() !== "false";
+// Allow LLM to structure answers while still being instructed to use ONLY provided context.
+// Default is false so the structured generator can "think" about the query.
+const STRICT_CONTEXT_ONLY = String(process.env.STRICT_CONTEXT_ONLY || "false").toLowerCase() !== "false";
 const RERANK_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
 const USE_HNSW = String(process.env.RAG_USE_HNSW || "false").toLowerCase() === "true";
 
