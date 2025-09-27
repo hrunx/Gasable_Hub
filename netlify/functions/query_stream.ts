@@ -124,13 +124,42 @@ export default async (req: Request): Promise<Response> => {
 
         let ragResult;
         try {
-          ragResult = await hybridRetrieve({
+          const timeLimitMs = Math.max(1000, Math.min(STREAM_BUDGET_MS, 8000));
+          const retrieval = hybridRetrieve({
             query,
             pg,
             openai,
             reporter: (step, payload) => emitStep(step, payload),
             config: Object.keys(overrides).length ? overrides : undefined,
           });
+          const timed = Promise.race([
+            retrieval,
+            new Promise<"TIMEOUT">(resolve => setTimeout(() => resolve("TIMEOUT"), timeLimitMs))
+          ]);
+          const res = await timed;
+          if (res === "TIMEOUT") {
+            emitStep("timeout_fallback", { budgetMs: timeLimitMs });
+            const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+            const hits = fallbackHits.map((hit, idx) => ({
+              id: hit.id,
+              score: Number(hit.score || 0),
+              text: hit.text,
+              order: idx + 1,
+            }));
+            const structured = await generateStructuredAnswer(openai, query, fallbackHits, STREAM_BUDGET_MS);
+            const structured_html = structuredToHtml(structured);
+            sse(controller, "final", {
+              query,
+              hits: hits.map(h => ({ id: h.id, score: h.score })),
+              answer: formatAnswerFromHits(fallbackHits),
+              answer_html: structured_html,
+              structured,
+              structured_html,
+              meta: { fallback: "timeout" },
+            });
+            return;
+          }
+          ragResult = res as any;
         } catch (err) {
           console.error("stream hybridRetrieve failed, using lexical fallback", err);
           const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
