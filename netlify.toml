@@ -6,6 +6,12 @@ publish = "."
 node_bundler = "esbuild"
 external_node_modules = ["openai", "pg", "pgvector"]
 
+[[redirects]]
+from = "/mcp"
+to = "/.netlify/functions/mcp"
+status = 200
+force = true
+
 # Route API calls to Netlify Function
 [[redirects]]
 from = "/api/*"
