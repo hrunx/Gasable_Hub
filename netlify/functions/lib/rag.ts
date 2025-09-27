@@ -954,102 +954,88 @@ export async function lexicalFallback(
   preferDomain: string | null
 ): Promise<DocHit[]> {
   const tokens = String(query || "")
+    .toLowerCase()
     .split(/\s+/)
     .map(t => t.trim())
     .filter(t => t.length >= 2)
     .slice(0, 8);
-  const scoreExpr = tokens
-    .map((_, idx) => `CASE WHEN COALESCE(text, li_metadata->>'chunk') ILIKE $${idx + 1} THEN 1 ELSE 0 END`)
-    .join(' + ') || '0';
-  const params = tokens.map(t => `%${t}%`);
   const cap = Math.max(1, Math.min(limit || DEFAULTS.finalK, 24));
+  const params = tokens.map(t => `%${t}%`);
+  const scoreExpr = tokens.length
+    ? tokens.map((_, idx) => `CASE WHEN COALESCE(text, li_metadata->>'chunk') ILIKE $${idx + 1} THEN 1 ELSE 0 END`).join(' + ')
+    : '0';
 
-  const preferLike = preferDomain ? `${preferDomain}%` : null;
-
-  const runQuery = async (extraCond?: string, extraParam?: string) => {
-    let sql = `
-      SELECT node_id,
-             left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
-             li_metadata,
-             (${scoreExpr}) AS score_calc
-      FROM ${SCHEMA}.${TABLE}
-    `;
-    const values: any[] = params.slice();
-    if (extraCond && extraParam) {
-      sql += `WHERE ${extraCond}\n`;
-      values.push(extraParam);
-    }
-    sql += `ORDER BY score_calc DESC, length(COALESCE(text, li_metadata->>'chunk')) DESC LIMIT $${values.length + 1}`;
-    values.push(cap);
-    const { rows } = await pg.query(sql, values);
-    return rows.map((r: any) => ({
-      id: r.node_id,
-      score: Number(r.score_calc || 0),
-      text: sanitizeText(r.text || ""),
-      metadata: r.li_metadata,
-    }));
-  };
-
-  try {
-    if (preferLike) {
-      const preferHits = await runQuery(`node_id LIKE $${params.length + 1}`, preferLike);
-      if (preferHits.length) return preferHits;
-    }
-  } catch (err) {
-    console.warn('lexicalFallback prefer domain failed', err);
-  }
-
-  try {
-    const hits = await runQuery();
-    if (hits.length) return hits;
-  } catch (err) {
-    console.warn('lexicalFallback base query failed', err);
-  }
-
-  // As a last resort use trigram similarity if available
-  try {
-    const like = preferLike || '%';
-    const sql = `
-      SELECT node_id,
-             left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
-             li_metadata,
-             similarity(COALESCE(text, li_metadata->>'chunk'), $2) AS sim
-      FROM ${SCHEMA}.${TABLE}
-      WHERE node_id LIKE $1 AND COALESCE(text, li_metadata->>'chunk') % $2
-      ORDER BY sim DESC
-      LIMIT $3`;
-    const { rows } = await pg.query(sql, [like, query, cap]);
-    if (rows.length) {
-      return rows.map((r: any) => ({
+  const results: DocHit[] = [];
+  const pushRows = (rows: any[], scoreField: string = 'score_calc') => {
+    for (const r of rows) {
+      results.push({
         id: r.node_id,
-        score: Number(r.sim || 0),
+        score: Number(r[scoreField] || 0),
         text: sanitizeText(r.text || ""),
         metadata: r.li_metadata,
-      }));
+      });
     }
-  } catch (err) {
-    console.warn('lexicalFallback trigram failed', err);
-  }
+  };
 
+  // gasable_index
   try {
-    const sql = `
-      SELECT node_id,
-             left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
-             li_metadata
-      FROM ${SCHEMA}.${TABLE}
-      WHERE COALESCE(text, li_metadata->>'chunk') % $1
-      ORDER BY similarity(COALESCE(text, li_metadata->>'chunk'), $1) DESC
-      LIMIT $2`;
-    const { rows } = await pg.query(sql, [query, cap]);
-    return rows.map((r: any) => ({
-      id: r.node_id,
-      score: 0,
-      text: sanitizeText(r.text || ""),
-      metadata: r.li_metadata,
-    }));
+    const sql = `SELECT node_id,
+                        left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
+                        li_metadata,
+                        (${scoreExpr}) AS score_calc
+                 FROM ${SCHEMA}.${TABLE}
+                 ORDER BY score_calc DESC, length(COALESCE(text, li_metadata->>'chunk')) DESC
+                 LIMIT $${params.length + 1}`;
+    const { rows } = await pg.query(sql, [...params, cap]);
+    pushRows(rows);
   } catch (err) {
-    console.warn('lexicalFallback final similarity failed', err);
+    console.warn('lexicalFallback gasable_index failed', err);
   }
 
-  return [];
+  // documents
+  try {
+    const cond = tokens.length ? tokens.map((_, i) => `content ILIKE $${i + 1}`).join(' OR ') : 'true';
+    const sql = `SELECT ('documents:' || id::text) AS node_id,
+                        left(COALESCE(content,''), 2000) AS text,
+                        '{}'::jsonb AS li_metadata,
+                        (${tokens.length ? tokens.map((_, i) => `CASE WHEN content ILIKE $${i + 1} THEN 1 ELSE 0 END`).join(' + ') : '0'}) AS score_calc
+                 FROM public.documents
+                 WHERE ${cond}
+                 ORDER BY score_calc DESC, id DESC
+                 LIMIT $${params.length + 1}`;
+    const { rows } = await pg.query(sql, [...params, cap]);
+    pushRows(rows);
+  } catch (err) {
+    // ignore if table missing
+  }
+
+  // embeddings
+  try {
+    const cond = tokens.length ? tokens.map((_, i) => `chunk_text ILIKE $${i + 1}`).join(' OR ') : 'true';
+    const sql = `SELECT ('embeddings:' || id::text) AS node_id,
+                        left(COALESCE(chunk_text,''), 2000) AS text,
+                        '{}'::jsonb AS li_metadata,
+                        (${tokens.length ? tokens.map((_, i) => `CASE WHEN chunk_text ILIKE $${i + 1} THEN 1 ELSE 0 END`).join(' + ') : '0'}) AS score_calc
+                 FROM public.embeddings
+                 WHERE ${cond}
+                 ORDER BY score_calc DESC, id DESC
+                 LIMIT $${params.length + 1}`;
+    const { rows } = await pg.query(sql, [...params, cap]);
+    pushRows(rows);
+  } catch (err) {
+    // ignore if table missing
+  }
+
+  if (!results.length) return [];
+
+  // Rerank using same heuristics as hybrid: domain boost, noise penalties, overlap, EV
+  const prefer = preferDomain || null;
+  const evIntent = /\bev\b|charger|charging|ocpp|station|kW/i.test(query);
+  const scored = results.map(h => {
+    const domainBoost = evIntent ? 0 : applyDomainBoost(h.id, prefer);
+    const final = h.score + domainBoost - noisePenaltyForId(h.id) - noisePenaltyForText(h.text);
+    return { ...h, score: final };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, cap);
 }
