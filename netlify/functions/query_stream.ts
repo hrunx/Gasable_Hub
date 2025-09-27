@@ -124,7 +124,7 @@ export default async (req: Request): Promise<Response> => {
 
         let ragResult;
         try {
-          const timeLimitMs = Math.max(1000, Math.min(STREAM_BUDGET_MS, 8000));
+          const timeLimitMs = Math.max(2000, Math.min(STREAM_BUDGET_MS + 2000, 11000));
           const retrieval = hybridRetrieve({
             query,
             pg,
@@ -139,7 +139,7 @@ export default async (req: Request): Promise<Response> => {
           const res = await timed;
           if (res === "TIMEOUT") {
             emitStep("timeout_fallback", { budgetMs: timeLimitMs });
-            const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+            const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, null);
             const hits = fallbackHits.map((hit, idx) => ({
               id: hit.id,
               score: Number(hit.score || 0),
@@ -162,7 +162,7 @@ export default async (req: Request): Promise<Response> => {
           ragResult = res as any;
         } catch (err) {
           console.error("stream hybridRetrieve failed, using lexical fallback", err);
-          const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+          const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, null);
           const hits = fallbackHits.map((hit, idx) => ({
             id: hit.id,
             score: Number(hit.score || 0),
