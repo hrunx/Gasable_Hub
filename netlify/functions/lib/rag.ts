@@ -83,12 +83,27 @@ function nowMs(): number {
 function sanitizeText(text: string): string {
   if (!text) return "";
   let s = String(text);
+  s = s.replace(/[\u2022\u25CF\u25A0\u25E6\u2219\u00B7]/g, " ");
+  s = s.replace(/[\r\t]/g, " ");
   s = s.replace(/<[^>]+>/g, " ");
   s = s.replace(/!\[[^\]]*\]\([^\)]*\)/g, " ");
   s = s.replace(/\[([^\]]*)\]\([^\)]*\)/g, (_m, p1) => p1 || "");
   s = s.replace(/https:\s+/g, "https://").replace(/http:\s+/g, "http://");
   s = s.replace(/\s{2,}/g, " ");
   s = s.replace(/\n{3,}/g, "\n\n");
+  s = s
+    .split(/\n+/)
+    .map(line => {
+      const L = line.trim();
+      if (!L) return "";
+      const noPunct = /[\.!?]/.test(L) === false;
+      const letters = L.replace(/[^A-Za-z]/g, "");
+      const upperRatio = letters ? (letters.replace(/[^A-Z]/g, "").length / letters.length) : 0;
+      if (noPunct && upperRatio > 0.6 && L.length > 14) return "";
+      return L.replace(/^[-–•\u2022\s]+/, "");
+    })
+    .filter(Boolean)
+    .join("\n");
   return s.trim();
 }
 
@@ -576,18 +591,48 @@ export function buildStructuredFromHits(query: string, hits: DocHit[], title?: s
   const sources = top.map(h => ({ id: h.id }));
   const titleText = title || truncate(query, 140);
 
-  // Naive extraction: take first lines as bullets
-  const joined = formatAnswerFromHits(top).split(/\n+/).filter(Boolean);
-  joined.slice(0, 6).forEach(line => {
-    const s = line.replace(/^[-•\u2022\s]+/, "").trim();
-    if (s) summary.push(s);
-  });
+  const joinedText = formatAnswerFromHits(top);
+  const sentences = joinedText
+    .split(/(?<=[\.!؟])\s+|\n+/)
+    .map(s => sanitizeText(s))
+    .map(s => s.replace(/^[-–]/, "").trim())
+    .filter(s => s.length >= 30 && s.length <= 280);
 
-  if (!summary.length) {
-    summary.push(truncate(top[0]?.text || "No context available."));
+  const qTokens = new Set(String(query).toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
+  const scored = sentences
+    .map(s => {
+      const toks = new Set(s.toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
+      let inter = 0;
+      for (const t of toks) if (qTokens.has(t)) inter += 1;
+      return { s, score: inter + Math.min(s.length, 220) / 220 * 0.1 };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.s);
+
+  const seen = new Set<string>();
+  for (const s of scored) {
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    summary.push(truncate(s, 260));
+    if (summary.length >= 8) break;
   }
 
-  sections.push({ heading: "Details", paragraph: truncate(joined.join(" \n"), 1200) });
+  if (!summary.length) summary.push(truncate(top[0]?.text || "No context available."));
+
+  const services: string[] = [];
+  const benefits: string[] = [];
+  const ops: string[] = [];
+  const svcRe = /(charge|charger|station|install|commission|ocpp|kW|DC|AC|EV)/i;
+  const benRe = /(efficien|cost|security|monitor|maintenance|reliab|scalab|insight|satisfaction)/i;
+  for (const s of scored) {
+    if (svcRe.test(s) && services.length < 6) services.push(truncate(s, 260));
+    else if (benRe.test(s) && benefits.length < 6) benefits.push(truncate(s, 260));
+    else if (ops.length < 4) ops.push(truncate(s, 260));
+  }
+  if (services.length) sections.push({ heading: "Services", bullets: services });
+  if (benefits.length) sections.push({ heading: "Benefits", bullets: benefits });
+  if (!sections.length) sections.push({ heading: "Details", paragraph: truncate(joinedText, 1200) });
 
   return { title: titleText, summary, sections, sources };
 }

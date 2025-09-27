@@ -205,7 +205,7 @@ export const handler: Handler = async (event) => {
         query,
         hits,
         answer,
-        answer_html,
+        answer_html: structured_html || answer_html,
         structured,
         structured_html,
         meta: {
