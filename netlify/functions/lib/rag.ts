@@ -45,6 +45,7 @@ export interface HybridRetrieveOptions {
 
 export interface HybridResult {
   query: string;
+  language: "ar" | "en" | "mixed";
   expansions: string[];
   selected: DocHit[];
   fused: Array<{ id: string; score: number }>;
@@ -57,6 +58,7 @@ const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
 const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
 const EMBED_COL = (process.env.PG_EMBED_COL || "embedding").replace(/[^a-zA-Z0-9_]/g, "");
+const ARABIC_RE = /[\u0600-\u06FF]/;
 // Allow LLM to structure answers while still being instructed to use ONLY provided context.
 // Default is false so the structured generator can "think" about the query.
 const STRICT_CONTEXT_ONLY = String(process.env.STRICT_CONTEXT_ONLY || "false").toLowerCase() !== "false";
@@ -82,9 +84,37 @@ function nowMs(): number {
   return Date.now();
 }
 
-function sanitizeText(text: string): string {
+function stripTatweel(text: string): string {
+  return text.replace(/[\u0640]/g, "");
+}
+
+function preprocessText(text: string): string {
   if (!text) return "";
   let s = String(text);
+  s = s.replace(/\u00ad/g, "");
+  s = stripTatweel(s);
+  s = s.replace(/(?<=[A-Za-z\u0600-\u06FF])\-\s+(?=[A-Za-z\u0600-\u06FF])/g, "");
+  s = s.replace(/(?:\s*\/gid\d{5})+/gi, " ");
+  s = s.replace(/([.!؟]){2,}/g, "$1");
+  return s;
+}
+
+function hasArabic(text: string): boolean {
+  return ARABIC_RE.test(text);
+}
+
+export function detectLanguage(text: string): "ar" | "en" | "mixed" {
+  const raw = text || "";
+  const arabic = hasArabic(raw);
+  const latin = /[A-Za-z]/.test(raw);
+  if (arabic && latin) return "mixed";
+  if (arabic) return "ar";
+  return "en";
+}
+
+function sanitizeText(text: string): string {
+  if (!text) return "";
+  let s = preprocessText(text);
   s = s.replace(/[\u2022\u25CF\u25A0\u25E6\u2219\u00B7]/g, " ");
   s = s.replace(/[\r\t]/g, " ");
   s = s.replace(/<[^>]+>/g, " ");
@@ -130,7 +160,8 @@ async function generateExpansions(
   openai: OpenAI | null,
   query: string,
   maxExpansions: number,
-  budgetMs: number
+  budgetMs: number,
+  langHint: "ar" | "en" | "mixed"
 ): Promise<string[]> {
   const base = sanitizeText(query);
   const fallback = [base, ...naiveExpansions(base)].filter(Boolean).slice(0, maxExpansions);
@@ -138,12 +169,15 @@ async function generateExpansions(
 
   const start = nowMs();
   try {
-    const sys = "You produce only a JSON array of search queries. Include Arabic variants if helpful. No text outside JSON.";
+    const sys = "You produce only a JSON array of search queries. Ensure the array includes helpful English and Arabic variants whenever relevant. No text outside JSON.";
     const resp = await openai.chat.completions.create({
       model: process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini",
       messages: [
         { role: "system", content: sys },
-        { role: "user", content: `Original: ${query}\nReturn up to ${maxExpansions} concise search queries as a JSON array.` },
+        {
+          role: "user",
+          content: `Original question (language: ${langHint}): ${query}\nReturn up to ${maxExpansions} concise search queries as a JSON array. Respect the original meaning, add synonyms, and include a translation to the other language if that improves recall.`,
+        },
       ],
     });
     if (nowMs() - start > budgetMs) return fallback.length ? fallback : [query];
@@ -346,6 +380,8 @@ function noisePenaltyForId(id: string): number {
   if (s.includes("certificate")) p += 0.4;
   if (s.includes("strategic supplier evaluation")) p += 0.35;
   if (s.includes("about us") || s.includes("our mission") || s.includes("our vision")) p += 0.3;
+  if (s.includes("gmail") || s.includes("mail-") || s.includes("proposal")) p += 0.5;
+  if (s.includes("ssms") || s.includes("incident") || s.includes("audit")) p += 0.4;
   // Prefer web sources when available over local file blobs
   if (s.startsWith("file://")) p += 0.15;
   return Math.min(0.9, p);
@@ -391,8 +427,15 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
       // ignore index creation errors
     }
   }
-  const expansions = await generateExpansions(openai, query, Math.max(1, config.expansions), config.budgetMs);
-  reporter?.("expansions", { count: expansions.length, expansions });
+  const language = detectLanguage(query);
+  const expansions = await generateExpansions(
+    openai,
+    query,
+    Math.max(1, config.expansions),
+    config.budgetMs,
+    language
+  );
+  reporter?.("expansions", { count: expansions.length, expansions, language });
 
   const all = new Map<string, DocHit>();
   const denseLists: Array<Array<{ id: string; score: number }>> = [];
@@ -536,11 +579,24 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
   }
 
   const deliveryTerms = ["deliver", "delivery", "doorstep", "order", "lpg", "cylinder", "diesel", "gasoline", "fuel"];
+  const evTerms = ["ev", "charger", "charging", "ocpp", "type 2", "ac", "dc", "kW", "cpo", "wallbox", "powerly"];
+  function isEVIntent(q: string): boolean {
+    const t = String(q || "").toLowerCase();
+    return evTerms.some(w => t.includes(w));
+  }
   function intentBoost(text: string): number {
     const t = String(text || "").toLowerCase();
     let b = 0;
     for (const w of deliveryTerms) if (t.includes(w)) b += 0.06;
     return Math.min(0.3, b);
+  }
+  function evBoost(text: string, id: string, active: boolean): number {
+    if (!active) return 0;
+    const t = String(text || "").toLowerCase() + " " + String(id || "").toLowerCase();
+    let b = 0;
+    for (const w of evTerms) if (t.includes(w)) b += 0.08;
+    if (String(id||"").startsWith("web://https://www.gasable.com")) b += 0.2;
+    return Math.min(0.6, b);
   }
   function overlapBoost(text: string, q: string): number {
     const toks = new Set(String(text || "").toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
@@ -552,9 +608,10 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
     return Math.min(0.5, ratio * 0.5);
   }
 
+  const evIntent = isEVIntent(query);
   candidates.sort((a, b) => {
-    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id) + intentBoost(a.text) + overlapBoost(a.text, query);
-    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id) + intentBoost(b.text) + overlapBoost(b.text, query);
+    const sa = a.score + applyDomainBoost(a.id, config.preferDomainBoost) - noisePenaltyForId(a.id) + intentBoost(a.text) + overlapBoost(a.text, query) + evBoost(a.text, a.id, evIntent);
+    const sb = b.score + applyDomainBoost(b.id, config.preferDomainBoost) - noisePenaltyForId(b.id) + intentBoost(b.text) + overlapBoost(b.text, query) + evBoost(b.text, b.id, evIntent);
     return sb - sa;
   });
 
@@ -584,6 +641,7 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
   const elapsedMs = nowMs() - start;
   return {
     query,
+    language,
     expansions,
     selected,
     fused,
