@@ -148,7 +148,7 @@ export default async (req: Request): Promise<Response> => {
             query,
             hits: hits.map(h => ({ id: h.id, score: h.score })),
             answer,
-            answer_html: String(answer || "").replace(/\n/g, '<br>'),
+            answer_html: structured_html || String(answer || "").replace(/\n/g, '<br>'),
             structured,
             structured_html,
             meta: { fallback: "lexical" },
@@ -196,7 +196,7 @@ export default async (req: Request): Promise<Response> => {
           query,
           hits: hits.map(h => ({ id: h.id, score: h.score })),
           answer,
-          answer_html: String(answer || "").replace(/\n/g, '<br>'),
+          answer_html: structured_html || String(answer || "").replace(/\n/g, '<br>'),
           structured,
           structured_html,
           meta: {
