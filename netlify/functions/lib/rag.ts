@@ -166,6 +166,18 @@ function sanitizeText(text: string): string {
   return s.trim();
 }
 
+// --- Intent helpers ---
+function isBrandIntent(q: string): boolean {
+  const t = String(q || "").toLowerCase();
+  if (!t.includes("gasable")) return false;
+  return /(what|who|about|profile|overview|services|company|mission|vision)\b/.test(t) || t.trim() === "gasable";
+}
+
+function isAboutIntent(q: string): boolean {
+  const t = String(q || "").toLowerCase();
+  return t.includes("gasable") && /(what\s+is|about|who\s+is|overview|profile)\b/.test(t);
+}
+
 function naiveExpansions(q: string): string[] {
   const base = String(q || "").trim();
   const parts = base.split(/\s+/).filter(Boolean);
@@ -229,6 +241,23 @@ async function generateExpansions(
 ): Promise<string[]> {
   const base = sanitizeText(query);
   const fallback = [base, ...naiveExpansions(base)].filter(Boolean).slice(0, maxExpansions);
+  // Curate expansions for brand/company intent to avoid dictionary-style expansions
+  if (isBrandIntent(base)) {
+    const set = new Set<string>();
+    const push = (s: string) => { const t = sanitizeText(s); if (t) set.add(t); };
+    [
+      base,
+      "Gasable",
+      "About Gasable",
+      "Gasable company profile",
+      "Gasable services",
+      "Gasable energy marketplace",
+      "Gasable EV charging",
+      "Gasable IoT",
+      "Gasable delivery",
+    ].forEach(push);
+    return Array.from(set).slice(0, maxExpansions);
+  }
   if (!openai) return fallback.length ? fallback : [query];
 
   const start = nowMs();
@@ -262,7 +291,10 @@ async function generateExpansions(
     push(base);
     if (Array.isArray(parsed)) {
       for (const item of parsed) {
-        push(String(item || ""));
+        const val = String(item || "");
+        // Drop dictionary/spelling expansions that derails brand questions
+        if (/\b(meaning|definition|spelling|gaseable|gassable)\b/i.test(val)) continue;
+        push(val);
         if (out.length >= maxExpansions) break;
       }
     }
@@ -457,7 +489,6 @@ async function keywordPrefilter(
 
 function applyDomainBoost(id: string, prefer: string | null): number {
   if (!prefer) return 0;
-  // Reduce domain boost weight to avoid overshadowing EV intent
   if (id.startsWith(prefer)) return 0.5;
   if (prefer.startsWith("web://") && id.startsWith("web://")) return 0.25;
   return 0;
@@ -712,6 +743,7 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
 
   const deliveryTerms = ["deliver", "delivery", "doorstep", "order", "lpg", "cylinder", "diesel", "gasoline", "fuel"];
   const evTerms = ["ev", "charger", "charging", "ocpp", "type 2", "ac", "dc", "kW", "cpo", "wallbox", "powerly"];
+  const brandTerms = ["gasable", "marketplace", "mission", "vision", "services", "about", "company", "platform", "sustainable", "un environment"];
   function isEVIntent(q: string): boolean {
     const t = String(q || "").toLowerCase();
     return evTerms.some(w => t.includes(w));
@@ -750,12 +782,26 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
     return Math.min(0.5, ratio * 0.5);
   }
 
+  function brandBoost(id: string, text: string, q: string): number {
+    if (!isAboutIntent(q) && !isBrandIntent(q)) return 0;
+    const s = (String(id || "") + " " + String(text || "")).toLowerCase();
+    let b = 0;
+    if (s.startsWith("web://https://www.gasable.com")) b += 0.35;
+    if (/\bgasable\b/.test(s)) b += 0.1;
+    for (const w of brandTerms) if (s.includes(w)) { b += 0.03; }
+    if (/company\s*profile|corporate\s*portal|about\s*us|our\s*(mission|vision)/i.test(s)) b += 0.1;
+    // Down-weight emails and proposals strongly for about intent
+    if (/mail|gmail|proposal|re:|fw:/i.test(s)) b -= 0.25;
+    return Math.max(-0.3, Math.min(0.6, b));
+  }
+
   const evIntent = isEVIntent(query);
+  const aboutIntent = isAboutIntent(query) || isBrandIntent(query);
   candidates.sort((a, b) => {
     const domainBoostA = evIntent ? 0 : applyDomainBoost(a.id, config.preferDomainBoost);
     const domainBoostB = evIntent ? 0 : applyDomainBoost(b.id, config.preferDomainBoost);
-    const sa = a.score + domainBoostA - noisePenaltyForId(a.id) - noisePenaltyForText(a.text) + intentBoost(a.text) + overlapBoost(a.text, query) + evBoost(a.text, a.id, evIntent) + idOverlapBoost(a.id, query);
-    const sb = b.score + domainBoostB - noisePenaltyForId(b.id) - noisePenaltyForText(b.text) + intentBoost(b.text) + overlapBoost(b.text, query) + evBoost(b.text, b.id, evIntent) + idOverlapBoost(b.id, query);
+    const sa = a.score + domainBoostA + brandBoost(a.id, a.text, query) - noisePenaltyForId(a.id) - noisePenaltyForText(a.text) + intentBoost(a.text) + overlapBoost(a.text, query) + evBoost(a.text, a.id, evIntent) + idOverlapBoost(a.id, query);
+    const sb = b.score + domainBoostB + brandBoost(b.id, b.text, query) - noisePenaltyForId(b.id) - noisePenaltyForText(b.text) + intentBoost(b.text) + overlapBoost(b.text, query) + evBoost(b.text, b.id, evIntent) + idOverlapBoost(b.id, query);
     return sb - sa;
   });
 
@@ -768,6 +814,7 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
   const filtered = candidates.filter(c => {
     const inter = tokenOverlap(c.text);
     if (evIntent) return inter >= 2 || /\bev\b|charger|charging|ocpp|station|kW/i.test(c.text) || /ev|charger|charging|evcs|sales.*pitch/i.test(String(c.id||""));
+    if (aboutIntent) return /gasable/i.test(c.text) || c.id.startsWith("web://https://www.gasable.com") || inter >= 1;
     return inter >= 1;
   });
   if (filtered.length >= Math.max(4, config.finalK)) candidates = filtered;
@@ -871,6 +918,38 @@ export function buildStructuredFromHits(query: string, hits: DocHit[], title?: s
   const sections: StructuredSection[] = [];
   const sources = top.map(h => ({ id: h.id }));
   const titleText = title || truncate(query, 140);
+
+  // If it's an about/brand intent, prefer a consistent section layout
+  if (isAboutIntent(query) || isBrandIntent(query)) {
+    const text = formatAnswerFromHits(top).slice(0, 4000);
+    const lines = text.split(/\n+/).map(s => sanitizeText(s)).filter(Boolean);
+    const services: string[] = [];
+    const mission: string[] = [];
+    const scale: string[] = [];
+    const products: string[] = [];
+    const support: string[] = [];
+    for (const s of lines) {
+      const low = s.toLowerCase();
+      if (/\b(ev|charger|charging|delivery|diesel|lpg|iot|sensor|meter|solar|battery)\b/.test(low)) services.push(s);
+      else if (/\bmission|vision|sustainab|un environment|award|recognition\b/.test(low)) mission.push(s);
+      else if (/\b1\.5\s*million|\b3000\b|network|stations|partners|cities\b/.test(low)) scale.push(s);
+      else if (/\bapp|portal|platform|marketplace|powerly|dashboard|mobile\b/.test(low)) products.push(s);
+      else if (/\b24\/7|support|customer care|service\s*level|sla\b/.test(low)) support.push(s);
+    }
+    const norm = (arr: string[], n: number) => dedupeKeepTop(arr, n, 160);
+    if (services.length) sections.push({ heading: "Services", bullets: norm(services, 6) });
+    if (products.length) sections.push({ heading: "Products & Platforms", bullets: norm(products, 4) });
+    if (support.length) sections.push({ heading: "Support", bullets: norm(support, 4) });
+    if (scale.length) sections.push({ heading: "Scale & Network", bullets: norm(scale, 4) });
+    if (mission.length) sections.push({ heading: "Mission & Recognition", bullets: norm(mission, 4) });
+    if (!sections.length) sections.push({ heading: "Overview", paragraph: truncate(text, 1200) });
+    // Summary: 3-5 crisp bullets
+    const sumSrc = [services[0], products[0], support[0], scale[0], mission[0]].filter(Boolean) as string[];
+    const sum = dedupeKeepTop(sumSrc, 5, 150);
+    if (sum.length) summary.push(...sum);
+    if (!summary.length && top[0]?.text) summary.push(truncate(top[0].text, 150));
+    return { title: titleText, summary, sections, sources };
+  }
 
   const joinedText = formatAnswerFromHits(top);
   const sentences = joinedText
