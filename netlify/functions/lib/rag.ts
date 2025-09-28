@@ -57,7 +57,7 @@ const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-large";
 const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
 const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
-const EMBED_COL = (process.env.PG_EMBED_COL || "embedding").replace(/[^a-zA-Z0-9_]/g, "");
+const EMBED_COL_DEFAULT = (process.env.PG_EMBED_COL || "embedding").replace(/[^a-zA-Z0-9_]/g, "");
 const ARABIC_RE = /[\u0600-\u06FF]/;
 // Allow LLM to structure answers while still being instructed to use ONLY provided context.
 // Default is false so the structured generator can "think" about the query.
@@ -82,6 +82,32 @@ export const DEFAULT_RAG_CONFIG = DEFAULTS;
 
 function nowMs(): number {
   return Date.now();
+}
+
+// --- Runtime database feature detection (vector column, tsv availability) ---
+let RESOLVED_EMBED_COL: string | null = null;
+let HAS_TSV: boolean | null = null;
+
+async function resolveDbFeatures(pg: PgClient): Promise<void> {
+  if (RESOLVED_EMBED_COL !== null && HAS_TSV !== null) return;
+  try {
+    const colCheck = await pg.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND column_name IN ('embedding_1536','embedding') ORDER BY CASE column_name WHEN 'embedding_1536' THEN 0 ELSE 1 END LIMIT 1`,
+      [SCHEMA, TABLE]
+    );
+    RESOLVED_EMBED_COL = (colCheck.rows?.[0]?.column_name || EMBED_COL_DEFAULT).replace(/[^a-zA-Z0-9_]/g, "");
+  } catch {
+    RESOLVED_EMBED_COL = EMBED_COL_DEFAULT;
+  }
+  try {
+    const tsvCheck = await pg.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND column_name='tsv' LIMIT 1`,
+      [SCHEMA, TABLE]
+    );
+    HAS_TSV = !!(tsvCheck.rows && tsvCheck.rows.length);
+  } catch {
+    HAS_TSV = false;
+  }
 }
 
 function stripTatweel(text: string): string {
@@ -309,17 +335,44 @@ function simpleMMR(candidates: DocHit[], k: number, lambda: number): DocHit[] {
 }
 
 async function bm25Search(pg: PgClient, query: string, limit: number): Promise<DocHit[]> {
-  const sql = `
-    SELECT node_id,
-           left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
-           li_metadata,
-           ts_rank_cd(tsv, plainto_tsquery('simple', $1)) AS score
-    FROM ${SCHEMA}.${TABLE}
-    WHERE tsv @@ plainto_tsquery('simple', $1)
-    ORDER BY score DESC
-    LIMIT $2`;
   try {
-    const { rows } = await pg.query(sql, [query, limit]);
+    // Prefer tsv if present
+    if (HAS_TSV) {
+      const sql = `
+        SELECT node_id,
+               left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
+               li_metadata,
+               ts_rank_cd(tsv, plainto_tsquery('simple', $1)) AS score
+        FROM ${SCHEMA}.${TABLE}
+        WHERE tsv @@ plainto_tsquery('simple', $1)
+        ORDER BY score DESC
+        LIMIT $2`;
+      const { rows } = await pg.query(sql, [query, limit]);
+      return rows.map((r: any) => ({
+        id: r.node_id,
+        score: Number(r.score || 0),
+        text: sanitizeText(r.text || ""),
+        metadata: r.li_metadata,
+      }));
+    }
+  } catch {}
+  // Fallback naive lexical order by length
+  try {
+    const tokens = String(query || "")
+      .split(/\s+/).map(t => t.trim()).filter(t => t.length > 2).slice(0, 6);
+    if (!tokens.length) return [];
+    const conds = tokens.map((_, i) => `COALESCE(text, li_metadata->>'chunk') ILIKE $${i + 1}`).join(' OR ');
+    const pats = tokens.map(t => `%${t}%`);
+    const sql = `
+      SELECT node_id,
+             left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
+             li_metadata,
+             length(COALESCE(text, li_metadata->>'chunk')) AS score
+      FROM ${SCHEMA}.${TABLE}
+      WHERE ${conds}
+      ORDER BY score DESC
+      LIMIT $${pats.length + 1}`;
+    const { rows } = await pg.query(sql, [...pats, limit]);
     return rows.map((r: any) => ({
       id: r.node_id,
       score: Number(r.score || 0),
@@ -461,6 +514,7 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
   const { query, pg, openai, reporter } = options;
   const config = { ...DEFAULTS, ...(options.config || {}) };
   const start = nowMs();
+  await resolveDbFeatures(pg);
   // Optional: create HNSW index to accelerate dense search (cosine)
   // Safe to call repeatedly; IF NOT EXISTS guards re-creation
   // This improves latency/scale but does not alter ranking logic
@@ -503,9 +557,9 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
           `SELECT node_id,
                   left(COALESCE(text, li_metadata->>'chunk'), 2000) AS text,
                   li_metadata,
-                  1 - (${EMBED_COL} <=> $1::vector) AS score
+                  1 - (${RESOLVED_EMBED_COL} <=> $1::vector) AS score
            FROM ${SCHEMA}.${TABLE}
-           ORDER BY ${EMBED_COL} <=> $1::vector
+           ORDER BY ${RESOLVED_EMBED_COL} <=> $1::vector
            LIMIT $2`,
           [vecText, config.denseK]
         );
@@ -874,14 +928,15 @@ export async function generateStructuredAnswer(
   if (!llm || !hits?.length) return buildStructuredFromHits(query, hits || []);
 
   const t0 = nowMs();
-  const context = hits.slice(0, 8).map((h, i) => `[${i + 1}] ${truncate(h.text, 900)}`).join("\n\n");
+  // Provide concise, budget-friendly context to the LLM
+  const context = hits.slice(0, 8).map((h, i) => `[${i + 1}] ${truncate(h.text, 550)}`).join("\n\n");
   const schema = {
     title: "string",
     summary: ["string"],
     sections: [{ heading: "string", bullets: ["string"], paragraph: "string" }],
     sources: [{ id: "string", label: "string" }],
   };
-  const sys = "You return ONLY strict JSON for a structured answer. No prose, no markdown, no code fences. Keep it concise and well-organized. Use bullets only for lists.";
+  const sys = "You return ONLY strict JSON for a structured answer. No prose, no markdown, no code fences. Keep it concise, to-the-point, and well-organized. Use bullets only for lists and keep each bullet under 180 characters. Answer using ONLY the provided context.";
   const usr = `Question: ${query}\n\nContext:\n${context}\n\nReturn JSON with this schema (omit empty fields): ${JSON.stringify(schema)}\nRules:\n- title: short phrase.\n- summary: 4–8 crisp bullets.\n- sections: 1–3 with helpful headings, use bullets only when natural.\n- sources: map to [index] if possible using labels like "+ [1] excerpt".`;
 
   try {
@@ -891,7 +946,7 @@ export async function generateStructuredAnswer(
         { role: "system", content: sys },
         { role: "user", content: usr },
       ],
-      temperature: 0.2,
+      temperature: 0.15,
     });
     if (nowMs() - t0 > budgetMs) return buildStructuredFromHits(query, hits);
     const raw = comp.choices?.[0]?.message?.content || "{}";

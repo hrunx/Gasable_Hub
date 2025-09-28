@@ -167,12 +167,23 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    const hits = ragResult.selected.map(hit => ({
+    let hits = ragResult.selected.map(hit => ({
       id: hit.id,
       score: Number(hit.score || 0),
       text: hit.text,
       metadata: hit.metadata,
     }));
+
+    // Fallback if hybrid returned no selected hits
+    if (!hits.length) {
+      const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+      hits = fallbackHits.map(hit => ({
+        id: hit.id,
+        score: Number(hit.score || 0),
+        text: hit.text,
+        metadata: hit.metadata,
+      }));
+    }
 
     const lang = ragResult.language;
     let answer: string | undefined;
@@ -206,7 +217,7 @@ export const handler: Handler = async (event) => {
     }
 
     // Structured answer (always attempt, falls back internally)
-    const structured = await generateStructuredAnswer(openai, query, ragResult.selected, DEFAULT_RAG_CONFIG.budgetMs);
+    const structured = await generateStructuredAnswer(openai, query, hits as any, DEFAULT_RAG_CONFIG.budgetMs);
     const structured_html = structuredToHtml(structured);
     const answer_html = answer ? String(answer).replace(/\n/g, '<br>') : undefined;
 

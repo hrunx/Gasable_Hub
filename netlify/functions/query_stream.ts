@@ -242,7 +242,7 @@ export default async (req: Request): Promise<Response> => {
           answer = formatAnswerFromHits(ragResult.selected);
         }
 
-        const structured = await generateStructuredAnswer(openai, query, ragResult.selected, STREAM_BUDGET_MS);
+        const structured = await generateStructuredAnswer(openai, query, hits.map(h => ({ id: h.id, score: h.score, text: h.text } as any)), STREAM_BUDGET_MS);
         const structured_html = structuredToHtml(structured);
         const response = {
           query,
