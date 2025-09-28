@@ -834,6 +834,37 @@ function truncate(text: string, maxLen = 800): string {
   return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
 }
 
+function normalizeForDedup(s: string): string {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0600-\u06FF]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dedupeKeepTop(items: string[], maxItems: number, maxLen = 180): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    const t = truncate(it, maxLen);
+    const key = normalizeForDedup(t);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function isNoisySentence(s: string): boolean {
+  const t = String(s || "").toLowerCase();
+  if (!t) return true;
+  if (/(join\s*now|request\s*a\s*quote)/i.test(t)) return true;
+  if (/(our\s+mission|our\s+vision|leading\s+platform|proudly\s+presents)/i.test(t)) return true;
+  if (/all\s+rights\s+reserved/i.test(t)) return true;
+  return false;
+}
+
 export function buildStructuredFromHits(query: string, hits: DocHit[], title?: string): StructuredAnswer {
   const top = hits.slice(0, 6);
   const summary: string[] = [];
@@ -846,7 +877,8 @@ export function buildStructuredFromHits(query: string, hits: DocHit[], title?: s
     .split(/(?<=[\.!؟])\s+|\n+/)
     .map(s => sanitizeText(s))
     .map(s => s.replace(/^[-–]/, "").trim())
-    .filter(s => s.length >= 30 && s.length <= 280);
+    .filter(s => s.length >= 30 && s.length <= 260)
+    .filter(s => !isNoisySentence(s));
 
   const qTokens = new Set(String(query).toLowerCase().split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2));
   const scored = sentences
@@ -861,11 +893,11 @@ export function buildStructuredFromHits(query: string, hits: DocHit[], title?: s
 
   const seen = new Set<string>();
   for (const s of scored) {
-    const key = s.toLowerCase();
+    const key = normalizeForDedup(s);
     if (seen.has(key)) continue;
     seen.add(key);
-    summary.push(truncate(s, 260));
-    if (summary.length >= 8) break;
+    summary.push(truncate(s, 160));
+    if (summary.length >= 6) break;
   }
 
   if (!summary.length) summary.push(truncate(top[0]?.text || "No context available."));
@@ -881,17 +913,22 @@ export function buildStructuredFromHits(query: string, hits: DocHit[], title?: s
   const slasRe = /(sla|service level|uptime|response time|maintenance|support)/i;
   const benRe = /(efficien|cost|security|monitor|maintenance|reliab|scalab|insight|satisfaction)/i;
   for (const s of scored) {
-    if (svcRe.test(s) && services.length < 6) services.push(truncate(s, 260));
-    else if (priceRe.test(s) && pricing.length < 4) pricing.push(truncate(s, 260));
-    else if (depRe.test(s) && deployment.length < 4) deployment.push(truncate(s, 260));
-    else if (slasRe.test(s) && slas.length < 4) slas.push(truncate(s, 260));
-    else if (benRe.test(s) && benefits.length < 6) benefits.push(truncate(s, 260));
+    if (svcRe.test(s) && services.length < 8) services.push(truncate(s, 160));
+    else if (priceRe.test(s) && pricing.length < 6) pricing.push(truncate(s, 160));
+    else if (depRe.test(s) && deployment.length < 6) deployment.push(truncate(s, 160));
+    else if (slasRe.test(s) && slas.length < 6) slas.push(truncate(s, 160));
+    else if (benRe.test(s) && benefits.length < 8) benefits.push(truncate(s, 160));
   }
-  if (services.length) sections.push({ heading: "Services", bullets: services });
-  if (deployment.length) sections.push({ heading: "Deployment", bullets: deployment });
-  if (pricing.length) sections.push({ heading: "Pricing & Commercials", bullets: pricing });
-  if (slas.length) sections.push({ heading: "SLAs & Support", bullets: slas });
-  if (benefits.length) sections.push({ heading: "Benefits", bullets: benefits });
+  const s1 = dedupeKeepTop(services, 6);
+  const s2 = dedupeKeepTop(deployment, 4);
+  const s3 = dedupeKeepTop(pricing, 4);
+  const s4 = dedupeKeepTop(slas, 4);
+  const s5 = dedupeKeepTop(benefits, 6);
+  if (s1.length) sections.push({ heading: "Services", bullets: s1 });
+  if (s2.length) sections.push({ heading: "Deployment", bullets: s2 });
+  if (s3.length) sections.push({ heading: "Pricing & Commercials", bullets: s3 });
+  if (s4.length) sections.push({ heading: "SLAs & Support", bullets: s4 });
+  if (s5.length) sections.push({ heading: "Benefits", bullets: s5 });
   if (!sections.length) sections.push({ heading: "Details", paragraph: truncate(joinedText, 1200) });
 
   return { title: titleText, summary, sections, sources };
