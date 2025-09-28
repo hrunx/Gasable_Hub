@@ -225,11 +225,11 @@ export default async (req: Request): Promise<Response> => {
               messages: [
                 {
                   role: "system",
-                  content: "You are a precise bilingual assistant for Gasable. Work strictly from the provided context. Structure the reply as: 1) customer need summary (max 2 sentences), 2) 3–6 evidence bullets with inline citations like [1], [2] matching the bracketed indices, 3) 2–4 recommended next steps. If context is insufficient, respond in the user's language with the exact phrase meaning 'No relevant context available.'",
+                  content: "You are a precise bilingual assistant (English and Arabic) for Gasable. Ground every answer strictly in the given context and don't fabricate. Structure answers around customer needs: problem, relevant insights from context, and recommended next actions (bulleted).",
                 },
                 {
                   role: "user",
-                  content: `Language: ${lang}\nQuestion: ${query}\nContext:\n${context}\nRespond in the user's language following the structure above. Do not invent information beyond the context.`,
+                  content: `Language: ${lang}\nQuestion: ${query}\nContext:\n${context}\nUse ONLY the provided context. If context is insufficient or irrelevant, say one of: 'لا يتوفر سياق كافٍ' in Arabic or 'No relevant context available.' in English. You work for Gasable; keep tone factual. Remove OCR noise, join hyphenated words, and avoid repeating gibberish. Validate that the final answer is coherent and fully addresses the question; if not, refine succinctly once. Cite key facts concisely. Answer in the user's language.\nProvide a concise, accurate answer that includes: (1) customer need summary, (2) key evidence bullets with citations, (3) recommended next steps:`,
                 },
               ],
             });
