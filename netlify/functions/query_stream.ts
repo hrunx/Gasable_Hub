@@ -191,14 +191,25 @@ export default async (req: Request): Promise<Response> => {
         }
 
         const lang = ragResult.language;
-        const hits = ragResult.selected.map((hit, idx) => ({
+        let hits = ragResult.selected.map((hit, idx) => ({
           id: hit.id,
           score: Number(hit.score || 0),
           text: hit.text,
           order: idx + 1,
         }));
 
-        emitStep("selected_context", { count: hits.length, language: lang });
+        if (!hits.length) {
+          const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+          hits = fallbackHits.map((hit, idx) => ({
+            id: hit.id,
+            score: Number(hit.score || 0),
+            text: hit.text,
+            order: idx + 1,
+          }));
+          emitStep("selected_context", { count: hits.length, language: lang, fallback: "lexical_zero" });
+        } else {
+          emitStep("selected_context", { count: hits.length, language: lang });
+        }
 
         let answer = "";
         const elapsedAfterRetrieve = Date.now() - started;
