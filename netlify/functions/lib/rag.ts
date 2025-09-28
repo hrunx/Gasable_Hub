@@ -110,6 +110,95 @@ async function resolveDbFeatures(pg: PgClient): Promise<void> {
   }
 }
 
+// --- Local BM25 (parity with Python rank_bm25) ---
+type Bm25State = {
+  builtAt: number;
+  docs: Array<{ id: string; text: string; tokens: string[] }>;
+  df: Map<string, number>;
+  avgdl: number;
+};
+let BM25_STATE_LOCAL: Bm25State | null = null;
+
+function normalizeForBm25(text: string): string {
+  const s = sanitizeText(text || "");
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function tokenizeForBm25(text: string): string[] {
+  const t = normalizeForBm25(text).toLowerCase();
+  return t.split(/[^a-z0-9\u0600-\u06FF]+/).filter(tok => tok.length > 1).slice(0, 4000);
+}
+
+async function loadCorpus(pg: PgClient, limitPerTable: number): Promise<Array<{ id: string; text: string }>> {
+  const items: Array<{ id: string; text: string }> = [];
+  try {
+    const r1 = await pg.query(`SELECT node_id, COALESCE(text,'') AS t FROM ${SCHEMA}.${TABLE} LIMIT $1`, [limitPerTable]);
+    r1.rows.forEach((r: any) => items.push({ id: `gasable_index:${r.node_id}`, text: normalizeForBm25(r.t || "") }));
+  } catch {}
+  try {
+    const r2 = await pg.query(`SELECT id::text AS id, COALESCE(content,'') AS t FROM public.documents ORDER BY id DESC LIMIT $1`, [limitPerTable]);
+    r2.rows.forEach((r: any) => items.push({ id: `documents:${r.id}`, text: normalizeForBm25(r.t || "") }));
+  } catch {}
+  try {
+    const r3 = await pg.query(`SELECT id::text AS id, COALESCE(chunk_text,'') AS t FROM public.embeddings ORDER BY id DESC LIMIT $1`, [limitPerTable]);
+    r3.rows.forEach((r: any) => items.push({ id: `embeddings:${r.id}`, text: normalizeForBm25(r.t || "") }));
+  } catch {}
+  return items;
+}
+
+async function buildBm25Local(pg: PgClient): Promise<Bm25State> {
+  const limit = Math.max(50, Number(process.env.RAG_CORPUS_LIMIT || 600));
+  const corpus = await loadCorpus(pg, limit);
+  const docs = corpus
+    .map(it => ({ id: it.id, text: it.text, tokens: tokenizeForBm25(it.text) }))
+    .filter(d => d.tokens.length);
+  const df = new Map<string, number>();
+  docs.forEach(d => {
+    const uniq = new Set(d.tokens);
+    uniq.forEach(tok => df.set(tok, (df.get(tok) || 0) + 1));
+  });
+  const avgdl = docs.reduce((a, d) => a + d.tokens.length, 0) / Math.max(1, docs.length);
+  BM25_STATE_LOCAL = { builtAt: nowMs(), docs, df, avgdl };
+  return BM25_STATE_LOCAL;
+}
+
+async function getBm25Local(pg: PgClient): Promise<Bm25State> {
+  const ttlSec = Math.max(60, Number(process.env.RAG_BM25_TTL_SEC || 300));
+  if (!BM25_STATE_LOCAL || (nowMs() - BM25_STATE_LOCAL.builtAt) / 1000 > ttlSec) {
+    return await buildBm25Local(pg);
+  }
+  return BM25_STATE_LOCAL;
+}
+
+function bm25Score(state: Bm25State, qTokens: string[], docTokens: string[]): number {
+  const k1 = 1.5;
+  const b = 0.75;
+  const N = state.docs.length;
+  const dl = docTokens.length;
+  const avgdl = state.avgdl || 1;
+  let score = 0;
+  const tf = new Map<string, number>();
+  docTokens.forEach(t => tf.set(t, (tf.get(t) || 0) + 1));
+  const uniqQ = Array.from(new Set(qTokens));
+  for (const term of uniqQ) {
+    const df = state.df.get(term) || 0.5;
+    const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+    const f = tf.get(term) || 0;
+    score += idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + b * (dl / avgdl))));
+  }
+  return score;
+}
+
+async function bm25SearchLocal(pg: PgClient, query: string, limit: number): Promise<DocHit[]> {
+  const state = await getBm25Local(pg);
+  const qTokens = tokenizeForBm25(query);
+  if (!qTokens.length) return [];
+  const scored = state.docs.map(d => ({ id: d.id, score: bm25Score(state, qTokens, d.tokens), text: d.text }));
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, Math.max(1, limit));
+  return top.map(h => ({ id: h.id, score: h.score, text: sanitizeText(h.text), metadata: undefined }));
+}
+
 function stripTatweel(text: string): string {
   return text.replace(/[\u0640]/g, "");
 }
@@ -699,7 +788,9 @@ export async function hybridRetrieve(options: HybridRetrieveOptions): Promise<Hy
   }
 
   if (config.useBm25 && nowMs() - start <= config.budgetMs) {
-    bm25Hits = await bm25Search(pg, query, config.denseFuse);
+    // Prefer DB tsv, then fallback to local BM25 parity
+    const dbHits = await bm25Search(pg, query, config.denseFuse);
+    bm25Hits = dbHits.length ? dbHits : await bm25SearchLocal(pg, query, config.denseFuse);
     bm25Hits.forEach(hit => {
       if (!all.has(hit.id)) all.set(hit.id, hit);
     });
