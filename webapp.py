@@ -71,7 +71,8 @@ def _safe_embed_col() -> str:
 
 def _default_embed_model() -> str:
 	"""Select sensible default embed model based on `EMBED_DIM` if none provided."""
-	model = (os.getenv("OPENAI_EMBED_MODEL") or "").strip()
+	# Prefer explicit model envs (support both OPENAI_EMBED_MODEL and EMBED_MODEL)
+	model = (os.getenv("OPENAI_EMBED_MODEL") or os.getenv("EMBED_MODEL") or "").strip()
 	if model:
 		return model
 	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
