@@ -824,8 +824,16 @@ async def api_query_stream(request: Request, q: str):
 					for (did, txt, score) in lex
 				])
 			yield {"event": "step", "data": json.dumps({"step": "lex_retrieval", "lists": len(lex_lists), "ms": int((time.time()-start)*1000)})}
-			# Fuse
-			fused = _rrf_fuse(dense_lists + lex_lists)
+			# Keyword SQL prefilter (parity with hybrid_search)
+			kw_lists = _keyword_sql_prefilter(q)
+			if kw_lists:
+				yield {"event": "step", "data": json.dumps({"step": "keyword_prefilter", "lists": sum(1 for _ in kw_lists)})}
+			# Brand boost (seed + official site) when relevant
+			boost = _brand_boost_candidates(q)
+			if boost:
+				yield {"event": "step", "data": json.dumps({"step": "brand_boost", "candidates": len(boost)})}
+			# Fuse all signals
+			fused = _rrf_fuse(dense_lists + lex_lists + ([lst for lst in kw_lists if lst] if kw_lists else []) + ([boost] if boost else []))
 			yield {"event": "step", "data": json.dumps({"step": "fusion", "candidates": len(fused)})}
 			# Dedup and take top_k
 			top_k = int(os.getenv("RAG_TOP_K", "6"))
