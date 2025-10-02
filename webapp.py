@@ -65,7 +65,7 @@ def _safe_embed_col() -> str:
 	if col in ("embedding", "embedding_1536"):
 		return col
 	# Auto based on dim
-	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
 	return "embedding_1536" if dim == 1536 else "embedding"
 
 
@@ -74,7 +74,7 @@ def _default_embed_model() -> str:
 	model = (os.getenv("OPENAI_EMBED_MODEL") or "").strip()
 	if model:
 		return model
-	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
 	return "text-embedding-3-small" if dim == 1536 else "text-embedding-3-large"
 
 
@@ -836,7 +836,28 @@ async def api_db_stats():
 			doc_count = cur.fetchone()[0]
 			cur.execute("SELECT node_id, left(text, 200) FROM public.gasable_index LIMIT 3")
 			samples = cur.fetchall()
-	return {"gasable_index": int(count), "embeddings": int(emb_count), "documents": int(doc_count), "samples": samples}
+			# Column diagnostics
+			emb_1536 = None
+			try:
+				cur.execute("SELECT COUNT(*) FROM public.gasable_index WHERE embedding_1536 IS NOT NULL")
+				emb_1536 = cur.fetchone()[0]
+			except Exception:
+				emb_1536 = None
+			emb_legacy = None
+			try:
+				cur.execute("SELECT COUNT(*) FROM public.gasable_index WHERE embedding IS NOT NULL")
+				emb_legacy = cur.fetchone()[0]
+			except Exception:
+				emb_legacy = None
+			active_col = _safe_embed_col()
+	return {
+		"gasable_index": int(count),
+		"embeddings": int(emb_count),
+		"documents": int(doc_count),
+		"samples": samples,
+		"embedding_col": active_col,
+		"embedding_counts": {"embedding": emb_legacy, "embedding_1536": emb_1536},
+	}
 
 
 @app.get("/api/status")
@@ -858,7 +879,8 @@ async def api_status():
         health = {"status": "ok"}
     except Exception as e:
         health = {"status": "error", "error": str(e)}
-    return {"db": health, "pids": pids}
+    active_col = _safe_embed_col()
+    return {"db": health, "pids": pids, "embedding_col": active_col}
 
 
 @app.get("/health")
