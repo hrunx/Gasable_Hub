@@ -732,9 +732,13 @@ def hybrid_search(query: str, top_k: int = 6) -> list[tuple[str, str, float]]:
 	# Keyword SQL prefilter to boost recall on domain-specific queries (e.g., contracts, suppliers, diesel)
 	kw_lists = _keyword_sql_prefilter(query)
 	lex_lists.extend([lst for lst in kw_lists if lst])
-	# Fuse, add brand boost if applicable, then apply MMR for diversity and dedup
+	# Fuse, add brand boost if applicable (weighted), then apply MMR for diversity and dedup
 	boost = _brand_boost_candidates(query)
-	fused = _rrf_fuse(dense_lists + lex_lists + ([boost] if boost else []))
+	boost_weight = int(os.getenv("RAG_BRAND_BOOST_WEIGHT", "3"))
+	lists = dense_lists + lex_lists
+	if boost:
+		lists += [boost] * max(1, boost_weight)
+	fused = _rrf_fuse(lists)
 	mmr = _mmr_select(fused, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.7")))
 	# Return as tuples (id, text, score)
 	out: list[tuple[str, str, float]] = []
