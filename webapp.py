@@ -861,6 +861,12 @@ async def api_status():
     return {"db": health, "pids": pids}
 
 
+@app.get("/health")
+async def health():
+	# Lightweight liveness endpoint for Cloud Run
+	return {"status": "ok"}
+
+
 @app.get("/api/db/schemas")
 async def api_db_schemas():
 	try:
