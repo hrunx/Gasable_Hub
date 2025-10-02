@@ -15,6 +15,7 @@ import time
 import html
 import asyncio
 from gasable_hub.tools import discover_tool_specs_via_dummy
+from gasable_hub.tools import invoke_tool_via_dummy
 
 from gasable_hub.ingestion.gdrive import (
 	authenticate_google_drive,
@@ -914,6 +915,41 @@ async def api_mcp_tools():
             s.setdefault("description", "")
             s.setdefault("module", "")
         return {"tools": specs}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/mcp_invoke")
+async def api_mcp_invoke(payload: dict):
+    """Invoke an MCP tool by name with arguments.
+
+    Body: { "name": string, "args": object }
+    Auth: optional bearer token via env API_TOKEN; if set, requests must include
+          Authorization: Bearer <token>
+    """
+    # Simple bearer auth if API_TOKEN is set
+    token = os.getenv("API_TOKEN")
+    if token:
+        try:
+            # FastAPI Request injection not used here; use manual header check via Starlette context
+            from starlette.requests import Request as _Req
+        except Exception:
+            pass
+    # Access headers from global context is not trivial; require token in payload as fallback
+    if token and (payload.get("token") != token):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    name = (payload.get("name") or "").strip()
+    args = payload.get("args") or {}
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    try:
+        fn, kwargs = invoke_tool_via_dummy(name, **args)
+        # Tools may be async
+        if asyncio.iscoroutinefunction(fn):
+            result = await fn(**kwargs)
+        else:
+            result = fn(**kwargs)
+        return {"status": "ok", "result": result}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

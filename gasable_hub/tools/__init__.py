@@ -95,3 +95,27 @@ def discover_tool_specs_via_dummy() -> list[dict]:
 	return get_registered_tool_specs()
 
 
+def invoke_tool_via_dummy(tool_name: str, **kwargs):
+	"""Invoke a registered MCP tool by name using a dummy MCP to capture functions.
+
+	This avoids running a separate MCP server process in Cloud Run. Tools are
+	registered in-process and looked up by their function name.
+	"""
+	registry: dict[str, object] = {}
+
+	class _ExecMCP:
+		def tool(self, *args, **kws):  # mimic FastMCP signature
+			def decorator(fn):
+				registry.setdefault(fn.__name__, fn)
+				return fn
+			return decorator
+
+	# Register all tools into the exec registry
+	auto_register_tools(_ExecMCP())
+	register_db_tools(_ExecMCP())
+	fn = registry.get(tool_name)
+	if not fn:
+		raise ValueError(f"Tool not found: {tool_name}")
+	return fn, kwargs
+
+
