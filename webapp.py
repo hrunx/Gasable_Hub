@@ -520,6 +520,52 @@ def _keyword_sql_prefilter(query: str, limit_each: int = 25) -> list[list[dict]]
 	return results
 
 
+def _brand_boost_candidates(query: str, limit: int = 8) -> list[dict]:
+	"""Return high-confidence brand rows (e.g., seed facts and official site) when query mentions brand.
+
+	This helps questions like "what is gasable" resolve even if general retrieval misses.
+	"""
+	q = normalize_text(query).lower()
+	if "gasable" not in q:
+		return []
+	items: list[dict] = []
+	try:
+		with get_pg_conn() as conn:
+			with conn.cursor() as cur:
+				# Seed fact if present
+				try:
+					cur.execute(
+						"""
+						SELECT node_id, left(COALESCE(text,''), 2000)
+						FROM public.gasable_index
+						WHERE node_id = 'seed_gasable'
+						"""
+					)
+					for nid, txt in cur.fetchall():
+						items.append({"source": "gasable_index", "id": nid, "text": clean_text(txt), "score": 0.99})
+				except Exception:
+					pass
+				# Official site chunks
+				try:
+					cur.execute(
+						"""
+						SELECT node_id, left(COALESCE(text,''), 2000)
+						FROM public.gasable_index
+						WHERE node_id LIKE 'web://https://www.gasable.com%'
+						ORDER BY node_id
+						LIMIT %s
+						""",
+						(limit,)
+					)
+					for nid, txt in cur.fetchall():
+						items.append({"source": "gasable_index", "id": nid, "text": clean_text(txt), "score": 0.95})
+				except Exception:
+					pass
+	except Exception:
+		return []
+	return items
+
+
 def _rrf_fuse(result_lists: list[list[dict]], k: int = 60) -> list[dict]:
 	scores: dict[str, float] = {}
 	meta: dict[str, dict] = {}
@@ -656,8 +702,9 @@ def hybrid_search(query: str, top_k: int = 6) -> list[tuple[str, str, float]]:
 	# Keyword SQL prefilter to boost recall on domain-specific queries (e.g., contracts, suppliers, diesel)
 	kw_lists = _keyword_sql_prefilter(query)
 	lex_lists.extend([lst for lst in kw_lists if lst])
-	# Fuse then apply MMR for diversity and dedup
-	fused = _rrf_fuse(dense_lists + lex_lists)
+	# Fuse, add brand boost if applicable, then apply MMR for diversity and dedup
+	boost = _brand_boost_candidates(query)
+	fused = _rrf_fuse(dense_lists + lex_lists + ([boost] if boost else []))
 	mmr = _mmr_select(fused, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.7")))
 	# Return as tuples (id, text, score)
 	out: list[tuple[str, str, float]] = []
