@@ -30,8 +30,12 @@ def _iter_tool_modules() -> list[ModuleType]:
 	for finder, name, ispkg in pkgutil.iter_modules(package.__path__, package_name + "."):
 		if name.endswith(".__pycache__"):
 			continue
-		mod = importlib.import_module(name)
-		modules.append(mod)
+		try:
+			mod = importlib.import_module(name)
+			modules.append(mod)
+		except Exception:
+			# Skip modules that fail to import; tool discovery should degrade gracefully
+			continue
 	return modules
 
 
