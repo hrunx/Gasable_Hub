@@ -717,23 +717,27 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 	lang = lang_hint or detect_language(query)
 	context = "\n---\n".join(normalize_text(clean_text(text)) for _, text, _ in context_chunks)
-	guard = (
-		"Use ONLY the provided context. If context is insufficient or irrelevant, say one of: "
-		"'لا يتوفر سياق كافٍ' in Arabic or 'No relevant context available.' in English. "
-		"You work for Gasable; keep tone factual. Remove OCR noise, join hyphenated words, and avoid repeating gibberish. "
-		"Validate that the final answer is coherent and fully addresses the question; if not, refine succinctly once. "
-		"Cite key facts concisely. Answer in the user's language."
-	)
+	# Enforce exact sectioning and tone for UI parity
 	sys = (
-		"You are a precise bilingual assistant (English and Arabic) for Gasable. "
-		"Ground every answer strictly in the given context and don't fabricate. "
-		"Structure answers around customer needs: problem, relevant insights from context, and recommended next actions (bulleted)."
+		"You are a precise bilingual (English/Arabic) assistant for Gasable. "
+		"Use ONLY the provided context. Do NOT invent facts. Keep phrasing clear and business-like."
+	)
+	format_spec = (
+		"Output EXACTLY these three sections, in this order, with the exact headings:\n"
+		"Problem — customer need summary\n"
+		"Key evidence (from the provided context)\n"
+		"Recommended next steps\n"
+		"Rules:\n"
+		"- Write in the user's language.\n"
+		"- Under 'Key evidence', use short bullet points grounded in the context (no links, no images).\n"
+		"- Under 'Recommended next steps', list action bullets relevant to the question.\n"
+		"- If context is insufficient, the 'Problem' line may note that explicitly, but still follow the exact 3-section format."
 	)
 	resp = client.chat.completions.create(
 		model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
 		messages=[
 			{"role": "system", "content": sys},
-			{"role": "user", "content": f"Language: {lang}\nQuestion: {query}\nContext:\n{context}\n{guard}\nProvide a concise, accurate answer that includes: (1) customer need summary, (2) key evidence bullets with citations, (3) recommended next steps:"},
+			{"role": "user", "content": f"Language: {lang}\nQuestion: {query}\nContext:\n{context}\n{format_spec}"},
 		],
 	)
 	return resp.choices[0].message.content
@@ -939,7 +943,13 @@ async def api_status():
     except Exception as e:
         health = {"status": "error", "error": str(e)}
     active_col = _safe_embed_col()
-    return {"db": health, "pids": pids, "embedding_col": active_col}
+    # Provide a lightweight PID if no stored pids.json is present
+    try:
+        import os as _os
+        pid = _os.getpid()
+    except Exception:
+        pid = None
+    return {"db": health, "pids": pids or {"pid": pid}, "embedding_col": active_col}
 
 
 @app.get("/health")
