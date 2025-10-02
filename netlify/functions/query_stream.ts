@@ -23,10 +23,36 @@ type PgClient = {
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
-const STREAM_BUDGET_MS = Number(process.env.STREAM_BUDGET_MS || DEFAULT_RAG_CONFIG.budgetMs || 8000);
+const STREAM_BUDGET_MS = Number(process.env.STREAM_BUDGET_MS || 8000);
 const STREAM_TOP_K = Number(process.env.RAG_STREAM_TOP_K || 8);
 
 let pgClient: PgClient | null = null;
+
+function escapeHtml(s: string): string {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function markdownToHtmlSimple(md: string): string {
+  if (!md) return "";
+  const s = escapeHtml(md);
+  const blocks = s.trim().split(/\n\s*\n/);
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const lines = block.split("\n").filter(ln => ln.trim());
+    const isList = lines.some(ln => /^\s*[-•]\s+/.test(ln));
+    if (isList) {
+      const bulletRe = /^\s*[-•]\s+/;
+      const listHtml = lines.map(ln => "<li>" + ln.replace(bulletRe, "") + "</li>").join("");
+      parts.push("<ul>" + listHtml + "</ul>");
+    } else {
+      parts.push("<p>" + lines.join(" ") + "</p>");
+    }
+  }
+  return parts.join("\n");
+}
 
 function extractProjectRef(): string {
   const supaUrl = process.env.SUPABASE_URL || "";
@@ -107,7 +133,21 @@ export default async (req: Request): Promise<Response> => {
       const started = Date.now();
       const emitStep = (step: string, payload: Record<string, any> = {}) => {
         const elapsedMs = Date.now() - started;
-        sse(controller, "step", { step, elapsedMs, ...payload });
+        // Align labels with Python webapp process panel
+        const stepMap: Record<string, string> = {
+          expansions: "expansions",
+          dense: "dense_retrieval",
+          lexical: "lex_retrieval",
+          keyword_prefilter: "keyword_prefilter",
+          bm25: "bm25",
+          fusion: "fusion",
+          selection: "retrieval_done",
+          selected_context: "selected_context",
+          timeout_fallback: "timeout_fallback",
+          answer_error: "answer_error",
+        };
+        const label = stepMap[step] || step;
+        sse(controller, "step", { step: label, elapsedMs, ...payload });
       };
       const AR = /[\u0600-\u06FF]/;
       const hasAr = AR.test(query);
@@ -123,6 +163,10 @@ export default async (req: Request): Promise<Response> => {
           overrides.finalK = STREAM_TOP_K;
           overrides.denseFuse = Math.max(DEFAULT_RAG_CONFIG.denseFuse, STREAM_TOP_K * 3);
         }
+        // Match local Python defaults closely for recall/latency
+        // Use fast, non-LLM expansions by default
+        // Enforce Python parity: expansions=2
+        overrides.expansions = 2;
 
         const effectiveFinalK = overrides.finalK || DEFAULT_RAG_CONFIG.finalK;
 
@@ -151,13 +195,37 @@ export default async (req: Request): Promise<Response> => {
               text: hit.text,
               order: idx + 1,
             }));
+            // Try to produce a concise bullet answer like webapp.py even in fallback
+            let raw = "";
+            if (openai && hits.length) {
+              const lang = initialLanguage;
+              const context = hits.map(h => `[${h.order}] ${h.text}`).join("\n\n");
+              try {
+                const comp = await openai.chat.completions.create({
+                  model: ANSWER_MODEL,
+                  messages: [
+                    { role: "system", content: "You are a precise bilingual assistant (English and Arabic) for Gasable. Ground every answer strictly in the given context and don't fabricate. Structure answers around customer needs: problem, relevant insights from context, and recommended next actions (bulleted)." },
+                    { role: "user", content: `Language: ${lang}\nQuestion: ${query}\nContext:\n${context}\nUse ONLY the provided context. If context is insufficient or irrelevant, say one of: 'لا يتوفر سياق كافٍ' in Arabic or 'No relevant context available.' in English. You work for Gasable; keep tone factual. Remove OCR noise, join hyphenated words, and avoid repeating gibberish. Validate that the final answer is coherent and fully addresses the question; if not, refine succinctly once. Cite key facts concisely. Answer in the user's language.\nProvide a concise, accurate answer that includes: (1) customer need summary, (2) key evidence bullets with citations, (3) recommended next steps:` },
+                  ],
+                });
+                raw = sanitizeAnswer(comp.choices?.[0]?.message?.content || "");
+              } catch {
+                raw = formatAnswerFromHits(fallbackHits);
+              }
+              if (!raw || !raw.trim()) {
+                raw = formatAnswerFromHits(fallbackHits) || "No relevant context available.";
+              }
+            } else {
+              raw = formatAnswerFromHits(fallbackHits);
+            }
             const structured = await generateStructuredAnswer(openai, query, fallbackHits, STREAM_BUDGET_MS);
             const structured_html = structuredToHtml(structured);
+            const answer_html = markdownToHtmlSimple(raw);
             sse(controller, "final", {
               query,
               hits: hits.map(h => ({ id: h.id, score: h.score })),
-              answer: formatAnswerFromHits(fallbackHits),
-              answer_html: structured_html,
+              answer: raw,
+            answer_html,
               structured,
               structured_html,
               meta: { fallback: "timeout", language: initialLanguage },
@@ -175,14 +243,32 @@ export default async (req: Request): Promise<Response> => {
             order: idx + 1,
           }));
           emitStep("selected_context", { count: hits.length, fallback: "lexical" });
-          const answer = formatAnswerFromHits(fallbackHits) || "No context available.";
+          // Use robust bullet prompt on lexical fallback
+          let answer = "";
+          if (openai && hits.length) {
+            try {
+              const context = hits.map(h => `[${h.order}] ${h.text}`).join("\n\n");
+              const comp = await openai.chat.completions.create({
+                model: ANSWER_MODEL,
+                messages: [
+                  { role: "system", content: "You are a precise bilingual assistant (English and Arabic) for Gasable. Ground every answer strictly in the given context and don't fabricate. Structure answers around customer needs: problem, relevant insights from context, and recommended next actions (bulleted)." },
+                  { role: "user", content: `Language: ${initialLanguage}\nQuestion: ${query}\nContext:\n${context}\nUse ONLY the provided context. If context is insufficient or irrelevant, say one of: 'لا يتوفر سياق كافٍ' in Arabic or 'No relevant context available.' in English. You work for Gasable; keep tone factual. Remove OCR noise, join hyphenated words, and avoid repeating gibberish. Validate that the final answer is coherent and fully addresses the question; if not, refine succinctly once. Cite key facts concisely. Answer in the user's language.\nProvide a concise, accurate answer that includes: (1) customer need summary, (2) key evidence bullets with citations, (3) recommended next steps:` },
+                ],
+              });
+              answer = sanitizeAnswer(comp.choices?.[0]?.message?.content || "");
+            } catch {
+              answer = formatAnswerFromHits(fallbackHits) || "No context available.";
+            }
+          } else {
+            answer = formatAnswerFromHits(fallbackHits) || "No context available.";
+          }
           const structured = await generateStructuredAnswer(openai, query, fallbackHits, STREAM_BUDGET_MS);
           const structured_html = structuredToHtml(structured);
           sse(controller, "final", {
             query,
             hits: hits.map(h => ({ id: h.id, score: h.score })),
             answer,
-            answer_html: structured_html || String(answer || "").replace(/\n/g, '<br>'),
+            answer_html: markdownToHtmlSimple(answer),
             structured,
             structured_html,
             meta: { fallback: "lexical", language: initialLanguage },
@@ -225,11 +311,11 @@ export default async (req: Request): Promise<Response> => {
               messages: [
                 {
                   role: "system",
-                  content: "You are a precise bilingual assistant (English and Arabic) for Gasable. Ground every answer strictly in the given context and don't fabricate. Structure answers around customer needs: problem, relevant insights from context, and recommended next actions (bulleted).",
+                  content: "You are a precise bilingual assistant (English and Arabic) for Gasable. Use ONLY provided context. Output must be concise bullets (3–7), each ≤ 140 chars. Structure: 1) short need summary, 2) key evidence with citations [n], 3) recommended next actions. No fluff.",
                 },
                 {
                   role: "user",
-                  content: `Language: ${lang}\nQuestion: ${query}\nContext:\n${context}\nUse ONLY the provided context. If context is insufficient or irrelevant, say one of: 'لا يتوفر سياق كافٍ' in Arabic or 'No relevant context available.' in English. You work for Gasable; keep tone factual. Remove OCR noise, join hyphenated words, and avoid repeating gibberish. Validate that the final answer is coherent and fully addresses the question; if not, refine succinctly once. Cite key facts concisely. Answer in the user's language.\nProvide a concise, accurate answer that includes: (1) customer need summary, (2) key evidence bullets with citations, (3) recommended next steps:`,
+                  content: `Language: ${lang}\nQuestion: ${query}\nContext:\n${context}\nRules:\n- Use ONLY the context; if insufficient, reply exactly: ${lang === "ar" ? "لا يتوفر سياق كافٍ" : "No relevant context available."}\n- Remove OCR noise and join hyphenated words.\n- Bullets only (no paragraphs), each ≤ 140 chars.\n- Include bracket citations like [1],[2] that refer to context order.\nReturn: bullets for (1) need summary, (2) key evidence, (3) next actions.`,
                 },
               ],
             });
@@ -238,9 +324,15 @@ export default async (req: Request): Promise<Response> => {
             emitStep("answer_error", { error: String(err || "") });
             answer = formatAnswerFromHits(ragResult.selected);
           }
+          if (!answer || !answer.trim()) {
+            answer = formatAnswerFromHits(ragResult.selected) || "No relevant context available.";
+          }
         } else {
           answer = formatAnswerFromHits(ragResult.selected);
         }
+
+        // Emit final step marker for parity
+        emitStep("answer_generated", { duration_ms: Date.now() - started, meta: { chars: (answer||"").length } });
 
         const structured = await generateStructuredAnswer(openai, query, hits.map(h => ({ id: h.id, score: h.score, text: h.text } as any)), STREAM_BUDGET_MS);
         const structured_html = structuredToHtml(structured);
@@ -248,7 +340,7 @@ export default async (req: Request): Promise<Response> => {
           query,
           hits: hits.map(h => ({ id: h.id, score: h.score })),
           answer,
-          answer_html: structured_html || String(answer || "").replace(/\n/g, '<br>'),
+          answer_html: markdownToHtmlSimple(answer),
           structured,
           structured_html,
           meta: {

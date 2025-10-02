@@ -75,6 +75,52 @@ server {
 ```
 Enable TLS via your proxy (e.g., Certbot/Let’s Encrypt).
 
+### Docker (local) and Google Cloud Run
+
+Build and run locally:
+```bash
+docker build -t gasable-hub:local .
+docker run --rm -p 8080:8080 \
+  -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  -e DATABASE_URL=$DATABASE_URL \
+  -e CORS_ORIGINS="*" \
+  gasable-hub:local
+# Open http://localhost:8080
+```
+
+Deploy to Cloud Run (replace <PROJECT_ID> and region):
+```bash
+gcloud auth login
+gcloud config set project <PROJECT_ID>
+
+# Build & push image via Cloud Build
+gcloud builds submit --tag gcr.io/<PROJECT_ID>/gasable-hub .
+
+# Deploy to Cloud Run
+gcloud run deploy gasable-hub \
+  --image gcr.io/<PROJECT_ID>/gasable-hub \
+  --platform managed \
+  --region europe-west1 \
+  --allow-unauthenticated \
+  --port 8080 \
+  --memory 1Gi \
+  --cpu 1 \
+  --max-instances 10 \
+  --concurrency 80
+
+# Set env vars (example)
+gcloud run services update gasable-hub \
+  --region europe-west1 \
+  --set-env-vars OPENAI_API_KEY=__SET_IN_CONSOLE__,DATABASE_URL=__SET_IN_CONSOLE__,CORS_ORIGINS=*
+```
+
+Secrets to add (Cloud Run → Variables & Secrets):
+- `OPENAI_API_KEY`
+- `DATABASE_URL` (Postgres with pgvector)
+- Optional: `GCS_BUCKET_NAME`, `GDRIVE_FOLDER_ID`, `OPENAI_MODEL`, `OPENAI_EMBED_MODEL`
+
+Service account: grant minimum IAM needed (Cloud Run Invoker, Storage access if using GCS). Prefer attaching the runtime service account rather than bundling JSON keys.
+
 ### Serverless (Netlify) deployment – UI + API Functions
 - This repo includes a Netlify static frontend and Netlify Functions API for a fully serverless setup.
 - Files:

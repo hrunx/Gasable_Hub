@@ -4,7 +4,7 @@ publish = "."
 
 [functions]
 node_bundler = "esbuild"
-external_node_modules = ["openai", "pg", "pgvector"]
+external_node_modules = ["openai", "pg", "pgvector", "@langchain/community", "@langchain/openai", "wink-bm25-text-search"]
 
 [[redirects]]
 from = "/mcp"
@@ -18,6 +18,10 @@ from = "/api/*"
 to = "/.netlify/functions/api/:splat"
 status = 200
 force = true
+
+[[edge_functions]]
+path = "/api/query_stream"
+function = "api-query-stream"
 
 # Route dashboard path to static file
 [[redirects]]

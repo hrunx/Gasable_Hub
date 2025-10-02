@@ -13,6 +13,7 @@ import {
   lexicalFallback,
   generateStructuredAnswer,
   structuredToHtml,
+  buildStructuredFromHits,
 } from "./lib/rag";
 import type { HybridConfig } from "./lib/rag";
 
@@ -26,6 +27,32 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
 
 let pgClient: PgClient | null = null;
+
+function escapeHtml(s: string): string {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function markdownToHtmlSimple(md: string): string {
+  if (!md) return "";
+  const s = escapeHtml(md);
+  const blocks = s.trim().split(/\n\s*\n/);
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const lines = block.split("\n").filter(ln => ln.trim());
+    const isList = lines.some(ln => /^\s*[-•]\s+/.test(ln));
+    if (isList) {
+      const bulletRe = /^\s*[-•]\s+/;
+      const listHtml = lines.map(ln => "<li>" + ln.replace(bulletRe, "") + "</li>").join("");
+      parts.push("<ul>" + listHtml + "</ul>");
+    } else {
+      parts.push("<p>" + lines.join(" ") + "</p>");
+    }
+  }
+  return parts.join("\n");
+}
 
 function extractProjectRef(): string {
   const supaUrl = process.env.SUPABASE_URL || "";
@@ -116,7 +143,15 @@ export const handler: Handler = async (event) => {
 
   try {
     const pg = await getPg();
-    const overrides: Partial<HybridConfig> = {};
+    const SAFE_BUDGET_MS = Math.max(6000, Math.min(DEFAULT_RAG_CONFIG.budgetMs || 8000, 9000));
+    const TIME_LIMIT_MS = Math.max(8000, Math.min(SAFE_BUDGET_MS + 2500, 11000));
+    const overrides: Partial<HybridConfig> = {
+      budgetMs: SAFE_BUDGET_MS,
+      // Enforce Python parity: expansions=2
+      expansions: 2,
+      denseK: Math.min(DEFAULT_RAG_CONFIG.denseK, 6),
+      denseFuse: Math.min(DEFAULT_RAG_CONFIG.denseFuse, 12),
+    };
     if (Number.isFinite(requestedK) && requestedK > 0) {
       overrides.finalK = requestedK;
       overrides.denseFuse = Math.max(DEFAULT_RAG_CONFIG.denseFuse, requestedK * 3);
@@ -126,12 +161,57 @@ export const handler: Handler = async (event) => {
 
     let ragResult;
     try {
-      ragResult = await hybridRetrieve({
+      const retrieval = hybridRetrieve({
         query,
         pg,
         openai,
         config: Object.keys(overrides).length ? overrides : undefined,
       });
+      const timed = Promise.race([
+        retrieval as any,
+        new Promise<"TIMEOUT">(resolve => setTimeout(() => resolve("TIMEOUT"), TIME_LIMIT_MS)),
+      ]);
+      const res = await timed;
+      if (res === "TIMEOUT") {
+        const fallbackHits = await lexicalFallback(pg, query, overrides.finalK || DEFAULT_RAG_CONFIG.finalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
+        const hits = fallbackHits.map(hit => ({
+          id: hit.id,
+          score: Number(hit.score || 0),
+          text: hit.text,
+          metadata: hit.metadata,
+        }));
+        const answer = withAnswer ? (formatAnswerFromHits(fallbackHits) || "No context available.") : undefined;
+        const structured = buildStructuredFromHits(query, fallbackHits);
+        const structured_html = structuredToHtml(structured);
+        const answer_html = answer ? markdownToHtmlSimple(answer) : undefined;
+        const process = [
+          { step: "received_query" },
+          { step: "timeout_fallback", duration_ms: TIME_LIMIT_MS },
+          { step: "answer_generated", duration_ms: SAFE_BUDGET_MS }
+        ];
+        const AR = /[\u0600-\u06FF]/;
+        const hasAr = AR.test(query);
+        const hasEn = /[A-Za-z]/.test(query);
+        const language = hasAr && hasEn ? "mixed" : (hasAr ? "ar" : "en");
+        return {
+          statusCode: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            query,
+            hits,
+            answer,
+            answer_html,
+            structured,
+            structured_html,
+            process,
+            meta: {
+              fallback: "timeout",
+              language,
+            },
+          }),
+        };
+      }
+      ragResult = res as any;
     } catch (err) {
       console.error("hybridRetrieve failed, using lexical fallback", err);
       const fallbackHits = await lexicalFallback(pg, query, effectiveFinalK, DEFAULT_RAG_CONFIG.preferDomainBoost);
@@ -144,11 +224,16 @@ export const handler: Handler = async (event) => {
       const answer = withAnswer ? (formatAnswerFromHits(fallbackHits) || "No context available.") : undefined;
       const structured = await generateStructuredAnswer(openai, query, fallbackHits, DEFAULT_RAG_CONFIG.budgetMs);
       const structured_html = structuredToHtml(structured);
-      const answer_html = answer ? String(answer).replace(/\n/g, '<br>') : undefined;
+      const answer_html = answer ? markdownToHtmlSimple(answer) : undefined;
       const AR = /[\u0600-\u06FF]/;
       const hasAr = AR.test(query);
       const hasEn = /[A-Za-z]/.test(query);
       const language = hasAr && hasEn ? "mixed" : (hasAr ? "ar" : "en");
+      const process = [
+        { step: "received_query" },
+        { step: "lexical_fallback" },
+        { step: "answer_generated", duration_ms: SAFE_BUDGET_MS }
+      ];
       return {
         statusCode: 200,
         headers: { "content-type": "application/json" },
@@ -159,6 +244,7 @@ export const handler: Handler = async (event) => {
           answer_html,
           structured,
           structured_html,
+          process,
           meta: {
             fallback: "lexical",
             language,
@@ -217,9 +303,19 @@ export const handler: Handler = async (event) => {
     }
 
     // Structured answer (always attempt, falls back internally)
-    const structured = await generateStructuredAnswer(openai, query, hits as any, DEFAULT_RAG_CONFIG.budgetMs);
+    const structured = await generateStructuredAnswer(openai, query, hits as any, SAFE_BUDGET_MS);
     const structured_html = structuredToHtml(structured);
-    const answer_html = answer ? String(answer).replace(/\n/g, '<br>') : undefined;
+    const answer_html = answer ? markdownToHtmlSimple(answer) : undefined;
+
+    const process = [
+      { step: "received_query" },
+      { step: "expansions", count: (ragResult.expansions || []).length },
+      { step: "dense_retrieval" },
+      { step: "lex_retrieval" },
+      { step: "fusion" },
+      { step: "retrieval_done", num_chunks: hits.length },
+      ...(withAnswer ? [{ step: "answer_generated", duration_ms: SAFE_BUDGET_MS }] : []),
+    ];
 
     return {
       statusCode: 200,
@@ -231,6 +327,7 @@ export const handler: Handler = async (event) => {
         answer_html: structured_html || answer_html,
         structured,
         structured_html,
+        process,
         meta: {
           language: ragResult.language,
           expansions: ragResult.expansions,

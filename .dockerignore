@@ -1,0 +1,29 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+.DS_Store
+node_modules
+dist
+build
+.git
+.gitignore
+.vscode
+.idea
+coverage
+.pytest_cache
+
+# Local data and exports
+storage/
+logs/
+exports/
+
+# Credentials – ensure you mount via secrets or env, not COPY
+*.json
+.env
+.env.*
+
+

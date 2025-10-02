@@ -1,3 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Secrets
+.env
+.env.*
+*.json
+
+# Local data
+storage/
+logs/
+exports/
 node_modules/
 *.log
 logs/

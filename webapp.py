@@ -54,10 +54,40 @@ app.add_middleware(
 )
 
 
+def _safe_embed_col() -> str:
+	"""Return pgvector column to use for embeddings in public.gasable_index.
+
+	Controlled by env var `PG_EMBED_COL`. If not set, auto-choose by `EMBED_DIM`.
+	Allowed values: 'embedding', 'embedding_1536'. Defaults to 'embedding_1536' when
+	EMBED_DIM == 1536; otherwise 'embedding'.
+	"""
+	col = (os.getenv("PG_EMBED_COL") or "").strip()
+	if col in ("embedding", "embedding_1536"):
+		return col
+	# Auto based on dim
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
+	return "embedding_1536" if dim == 1536 else "embedding"
+
+
+def _default_embed_model() -> str:
+	"""Select sensible default embed model based on `EMBED_DIM` if none provided."""
+	model = (os.getenv("OPENAI_EMBED_MODEL") or "").strip()
+	if model:
+		return model
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
+	return "text-embedding-3-small" if dim == 1536 else "text-embedding-3-large"
+
+
 def get_pg_conn():
 	# Prefer full DSN if provided (e.g., Neon / Netlify)
 	dsn = os.getenv("DATABASE_URL") or os.getenv("NETLIFY_DATABASE_URL")
 	if dsn:
+		# Ensure SSL for managed Postgres (e.g., Supabase) unless explicitly disabled
+		if "sslmode" not in dsn:
+			if "?" in dsn:
+				dsn = dsn + "&sslmode=require"
+			else:
+				dsn = dsn + "?sslmode=require"
 		return psycopg2.connect(dsn)
 	# Fallback to discrete params
 	return psycopg2.connect(
@@ -69,9 +99,10 @@ def get_pg_conn():
 	)
 
 
+
 def embed_query(q: str) -> list[float]:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-	resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=q)
+	resp = client.embeddings.create(model=_default_embed_model(), input=q)
 	return resp.data[0].embedding
 
 
@@ -88,17 +119,29 @@ def upsert_embeddings(docs: list[dict]) -> int:
 				api_key = os.getenv("OPENAI_API_KEY")
 				if api_key:
 					try:
-						emb_resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=text)
+						emb_resp = client.embeddings.create(model=_default_embed_model(), input=text)
 						vec = emb_resp.data[0].embedding
 						vec_str = "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
-						cur.execute(
-							"""
-							INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
-							VALUES (%s, %s, %s::vector, '{}'::jsonb)
-							ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding=EXCLUDED.embedding
-							""",
-							(did, text, vec_str),
-						)
+						# Choose embedding column dynamically
+						col = _safe_embed_col()
+						if col == "embedding_1536":
+							cur.execute(
+								f"""
+								INSERT INTO public.gasable_index (node_id, text, embedding_1536, li_metadata)
+								VALUES (%s, %s, %s::vector, '{{}}'::jsonb)
+								ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding_1536=EXCLUDED.embedding_1536
+								""",
+								(did, text, vec_str),
+							)
+						else:
+							cur.execute(
+								f"""
+								INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
+								VALUES (%s, %s, %s::vector, '{{}}'::jsonb)
+								ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding=EXCLUDED.embedding
+								""",
+								(did, text, vec_str),
+							)
 					except Exception:
 						# Fallback to text-only upsert if embedding fails
 						cur.execute(
@@ -127,15 +170,28 @@ def upsert_embeddings(docs: list[dict]) -> int:
 def vector_search(query_embedding: list[float], k: int = 5):
 	with get_pg_conn() as conn:
 		with conn.cursor() as cur:
-			cur.execute(
-				"""
-				SELECT node_id, text, 1 - (embedding <=> %s::vector) AS similarity
-				FROM public.gasable_index
-				ORDER BY similarity DESC
-				LIMIT %s
-				""",
-				("[" + ",".join(f"{x:.8f}" for x in query_embedding) + "]", k),
-			)
+			col = _safe_embed_col()
+			pgvec = "[" + ",".join(f"{x:.8f}" for x in query_embedding) + "]"
+			if col == "embedding_1536":
+				cur.execute(
+					"""
+					SELECT node_id, text, 1 - (embedding_1536 <=> %s::vector) AS similarity
+					FROM public.gasable_index
+					ORDER BY similarity DESC
+					LIMIT %s
+					""",
+					(pgvec, k),
+				)
+			else:
+				cur.execute(
+					"""
+					SELECT node_id, text, 1 - (embedding <=> %s::vector) AS similarity
+					FROM public.gasable_index
+					ORDER BY similarity DESC
+					LIMIT %s
+					""",
+					(pgvec, k),
+				)
 			return cur.fetchall()
 
 
@@ -324,7 +380,7 @@ def _bm25_search(query: str, k: int = 10) -> list[tuple[str, str, float]]:
 
 def embed_queries(queries: list[str]) -> list[list[float]]:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-	resp = client.embeddings.create(model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), input=queries)
+	resp = client.embeddings.create(model=_default_embed_model(), input=queries)
 	# Preserve order
 	return [d.embedding for d in resp.data]
 
@@ -336,31 +392,48 @@ def _vector_search_combined(query_vec: list[float], k_each: int = 10) -> list[di
 	with get_pg_conn() as conn:
 		with conn.cursor() as cur:
 			# gasable_index cosine similarity (higher is better)
-			cur.execute(
-				"""
-				SELECT 'gasable_index' AS source, node_id AS id, COALESCE(text,'') AS text,
-				       1 - (embedding <=> %s::vector) AS score
-				FROM public.gasable_index
-				ORDER BY score DESC
-				LIMIT %s
-				""",
-				(pgvec, k_each),
-			)
+			col = _safe_embed_col()
+			if col == "embedding_1536":
+				cur.execute(
+					"""
+					SELECT 'gasable_index' AS source, node_id AS id, COALESCE(text,'') AS text,
+					       1 - (embedding_1536 <=> %s::vector) AS score
+					FROM public.gasable_index
+					ORDER BY score DESC
+					LIMIT %s
+					""",
+					(pgvec, k_each),
+				)
+			else:
+				cur.execute(
+					"""
+					SELECT 'gasable_index' AS source, node_id AS id, COALESCE(text,'') AS text,
+					       1 - (embedding <=> %s::vector) AS score
+					FROM public.gasable_index
+					ORDER BY score DESC
+					LIMIT %s
+					""",
+					(pgvec, k_each),
+				)
 			for r in cur.fetchall():
 				results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
 			# embeddings L2 distance (lower is better) → convert to similarity
-			cur.execute(
-				"""
-				SELECT 'embeddings' AS source, id::text AS id, COALESCE(chunk_text,'') AS text,
-				       1.0 / (1.0 + (embedding <-> %s::vector)) AS score
-				FROM public.embeddings
-				ORDER BY (embedding <-> %s::vector) ASC
-				LIMIT %s
-				""",
-				(pgvec, pgvec, k_each),
-			)
-			for r in cur.fetchall():
-				results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
+			try:
+				cur.execute(
+					"""
+					SELECT 'embeddings' AS source, id::text AS id, COALESCE(chunk_text,'') AS text,
+					       1.0 / (1.0 + (embedding <-> %s::vector)) AS score
+					FROM public.embeddings
+					ORDER BY (embedding <-> %s::vector) ASC
+					LIMIT %s
+					""",
+					(pgvec, pgvec, k_each),
+				)
+				for r in cur.fetchall():
+					results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
+			except Exception:
+				# If table or dims mismatch, skip gracefully
+				pass
 	return results
 
 
@@ -948,16 +1021,29 @@ async def api_file_entries(file: str, limit: int = 500, offset: int = 0, full: i
 		like = file + "#%"
 		with get_pg_conn() as conn:
 			with conn.cursor() as cur:
-				cur.execute(
-					"""
-					SELECT node_id, COALESCE(text,''), CASE WHEN embedding IS NULL THEN NULL ELSE embedding::text END AS embedding_text
-					FROM public.gasable_index
-					WHERE node_id LIKE %s
-					ORDER BY node_id
-					OFFSET %s LIMIT %s
-					""",
-					(like, offset, limit),
-				)
+				col = _safe_embed_col()
+				if col == "embedding_1536":
+					cur.execute(
+						"""
+						SELECT node_id, COALESCE(text,''), CASE WHEN embedding_1536 IS NULL THEN NULL ELSE embedding_1536::text END AS embedding_text
+						FROM public.gasable_index
+						WHERE node_id LIKE %s
+						ORDER BY node_id
+						OFFSET %s LIMIT %s
+						""",
+						(like, offset, limit),
+					)
+				else:
+					cur.execute(
+						"""
+						SELECT node_id, COALESCE(text,''), CASE WHEN embedding IS NULL THEN NULL ELSE embedding::text END AS embedding_text
+						FROM public.gasable_index
+						WHERE node_id LIKE %s
+						ORDER BY node_id
+						OFFSET %s LIMIT %s
+						""",
+						(like, offset, limit),
+					)
 				rows = cur.fetchall()
 				items: list[dict] = []
 				for nid, txt, emb in rows:
