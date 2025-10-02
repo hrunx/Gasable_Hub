@@ -419,22 +419,23 @@ def _vector_search_combined(query_vec: list[float], k_each: int = 10) -> list[di
 			for r in cur.fetchall():
 				results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
 			# embeddings L2 distance (lower is better) → convert to similarity
-			try:
-				cur.execute(
-					"""
-					SELECT 'embeddings' AS source, id::text AS id, COALESCE(chunk_text,'') AS text,
-					       1.0 / (1.0 + (embedding <-> %s::vector)) AS score
-					FROM public.embeddings
-					ORDER BY (embedding <-> %s::vector) ASC
-					LIMIT %s
-					""",
-					(pgvec, pgvec, k_each),
-				)
-				for r in cur.fetchall():
-					results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
-			except Exception:
-				# If table or dims mismatch, skip gracefully
-				pass
+			# Try both canonical and 1536 columns if exist
+			for emb_col in ("embedding", "embedding_1536"):
+				try:
+					cur.execute(
+						f"""
+						SELECT 'embeddings' AS source, id::text AS id, COALESCE(chunk_text,'') AS text,
+						       1.0 / (1.0 + ({emb_col} <-> %s::vector)) AS score
+						FROM public.embeddings
+						ORDER BY ({emb_col} <-> %s::vector) ASC
+						LIMIT %s
+						""",
+						(pgvec, pgvec, k_each),
+					)
+					for r in cur.fetchall():
+						results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
+				except Exception:
+					continue
 	return results
 
 
@@ -461,6 +462,15 @@ def _keyword_sql_prefilter(query: str, limit_each: int = 25) -> list[list[dict]]
 	]:
 		if kw in q_norm:
 			keywords.add(kw)
+	# Also add salient tokens from the query itself (e.g., brand terms like 'gasable')
+	try:
+		query_tokens = re.findall(r"[a-zA-Z\u0600-\u06FF][a-zA-Z0-9_\u0600-\u06FF]{2,}", q_norm)
+		stop = {"the","and","for","with","from","this","that","into","your","you","are","was","were","have","has","had","can","will","should","about"}
+		for t in query_tokens[:10]:
+			if t not in stop:
+				keywords.add(t)
+	except Exception:
+		pass
 	if not keywords:
 		return []
 	patterns = [f"%{k}%" for k in sorted(keywords)]
