@@ -175,7 +175,7 @@ def main() -> None:
 	parser = argparse.ArgumentParser(description="Ingest local folder into PGVector using LlamaIndex embeddings")
 	parser.add_argument("--path", default=os.getenv("LOCAL_INGEST_PATH", "/Users/hrn/Desktop/Gasable_hrn"), help="Root folder to ingest")
 	parser.add_argument("--chunk-chars", type=int, default=int(os.getenv("CHUNK_CHARS", "4000")), help="Characters per chunk")
-parser.add_argument("--embed-model", default=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), help="OpenAI embedding model for LlamaIndex")
+	parser.add_argument("--embed-model", default=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), help="OpenAI embedding model for LlamaIndex")
 	parser.add_argument("--log-file", default=os.getenv("INGEST_LOG_FILE", "logs/run_local_ingest.log"), help="Optional log file path")
 	parser.add_argument("--resume", action="store_true", help="Skip chunks already present in public.gasable_index")
 	args = parser.parse_args()
