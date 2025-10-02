@@ -474,6 +474,7 @@ def _keyword_sql_prefilter(query: str, limit_each: int = 25) -> list[list[dict]]
 	if not keywords:
 		return []
 	patterns = [f"%{k}%" for k in sorted(keywords)]
+	limit_each = int(os.getenv("RAG_KW_PREFILTER_LIMIT", str(limit_each)))
 	results: list[list[dict]] = []
 	with get_pg_conn() as conn:
 		with conn.cursor() as cur:
