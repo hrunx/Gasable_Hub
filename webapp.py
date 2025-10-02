@@ -471,6 +471,17 @@ def _keyword_sql_prefilter(query: str, limit_each: int = 25) -> list[list[dict]]
 				keywords.add(t)
 	except Exception:
 		pass
+	# Heuristic: if query mentions IoT, add domain synonyms to catch docs that avoid the term 'IoT'
+	if ("iot" in q_norm) or ("internet of things" in q_norm) or ("انترنت الاشياء" in q_norm) or ("إنترنت الأشياء" in q_norm):
+		for t in [
+			"sensor","sensors","ultrasonic","probe","gps","tracker","tracking","mobile dvr","dvr",
+			"smart meter","meter","liquid level","level","remote monitoring","telemetry","lock","smart lock",
+			"valve","hatch","controller","temperature","fuel","diesel","lpg","tamper","vandalism",
+			# Arabic hints
+			"مستشعر","حساس","مجسات","موجات فوق صوتية","موجات-فوق-صوتية","عداد ذكي","عداد","مستوى السائل",
+			"المستوى","التتبع","تتبع","نظام تتبع","مراقبة عن بعد","مراقبة","تحكم","قفل ذكي","قفل","صمام"
+		]:
+			keywords.add(t)
 	if not keywords:
 		return []
 	patterns = [f"%{k}%" for k in sorted(keywords)]
@@ -559,6 +570,25 @@ def _brand_boost_candidates(query: str, limit: int = 8) -> list[dict]:
 					)
 					for nid, txt in cur.fetchall():
 						items.append({"source": "gasable_index", "id": nid, "text": clean_text(txt), "score": 0.95})
+				except Exception:
+					pass
+				# Add high-signal IoT matches near 'gasable' brand
+				try:
+					cur.execute(
+						"""
+						SELECT node_id, left(COALESCE(text,''), 2000)
+						FROM public.gasable_index
+						WHERE text ILIKE '%gasable%' AND (
+						  text ILIKE '%sensor%' OR text ILIKE '%ultrasonic%' OR text ILIKE '%tracker%' OR text ILIKE '%remote monitoring%'
+						  OR text ILIKE '%smart%' OR text ILIKE '%meter%' OR text ILIKE '%telemetry%' OR text ILIKE '%lock%'
+						)
+						ORDER BY node_id
+						LIMIT %s
+						""",
+						(limit,)
+					)
+					for nid, txt in cur.fetchall():
+						items.append({"source": "gasable_index", "id": nid, "text": clean_text(txt), "score": 0.9})
 				except Exception:
 					pass
 	except Exception:
@@ -733,6 +763,13 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 		"- Under 'Recommended next steps', list action bullets relevant to the question.\n"
 		"- If context is insufficient, the 'Problem' line may note that explicitly, but still follow the exact 3-section format."
 	)
+	# Domain guardrails for IoT questions: prefer operational specifics if query mentions IoT
+	if any(t in (lang_hint or detect_language(query)) for t in ["ar","en"]):
+		pass
+	if re.search(r"\b(iot|internet of things|إنترنت الأشياء|انترنت الاشياء)\b", query, flags=re.IGNORECASE):
+		format_spec += (
+			"\nWhen the question mentions IoT, ensure bullets cover: sensors/meters, connectivity/telemetry, remote monitoring, locks/valves/security, analytics/reports, and integration with operations/logistics."  # noqa: E501
+		)
 	resp = client.chat.completions.create(
 		model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
 		messages=[
