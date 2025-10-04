@@ -9,8 +9,8 @@ Auth
   - Include `"token": "<API_TOKEN>"` in the JSON body when set.
 
 Example API token (set in Cloud Run → Variables as API_TOKEN)
-- Value (example): `ak_pq7X-hehehe-69-Q2hrndagoat-420-Vt8fukuf-3MZ`
-  - Contains required markers: hehehe, hrndagoat, fukuf, and numbers 69 and 420.
+- Value (example): `API_TOKEN=ak_gasablehub-pq7X-55-L0hrn4da2goat0-hehe-3MZ`
+ 
 
 ---
 
@@ -79,14 +79,14 @@ curl -s "$BASE/api/mcp_tools"
 curl -s -X POST "$BASE/api/mcp_invoke" -H 'Content-Type: application/json' -d '{
   "name":"db_health",
   "args":{},
-  "token":"ak_pq7X-hehehe-69-Q2hrndagoat-420-Vt8fukuf-3MZ"
+  "token":"ak_gasablehub-pq7X-55-L0hrn4da2goat0-hehe-3MZ"
 }'
 
 # Ingest web via tool
 curl -s -X POST "$BASE/api/mcp_invoke" -H 'Content-Type: application/json' -d '{
   "name":"ingest_web",
   "args":{"query":"site:gasable.com","max_results":10,"allow_domains_csv":"gasable.com"},
-  "token":"ak_pq7X-hehehe-69-Q2hrndagoat-420-Vt8fukuf-3MZ"
+  "token":"ak_gasablehub-pq7X-55-L0hrn4da2goat0-hehe-3MZ"
 }'
 ```
 
