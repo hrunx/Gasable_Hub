@@ -210,6 +210,8 @@ This project exposes several knobs via environment variables. Defaults are chose
 - `OPENAI_API_KEY` – required for embeddings and LLM answers
 - `OPENAI_EMBED_MODEL` / `EMBED_MODEL` – default `text-embedding-3-small` (1536)
 - `OPENAI_MODEL` / `RERANK_MODEL` – default `gpt-5-mini` (you can use `gpt-4o-mini`)
+- `AGENT_ROLE` – configure the AI assistant's role (default `customer care assistant`)
+  - Examples: `customer care assistant`, `supplier assistant`, `logistics coordinator`, `technical support agent`
 
 ### Database (Postgres + pgvector)
 - `DATABASE_URL` (or `SUPABASE_DB_URL`) – pooled URL with SSL

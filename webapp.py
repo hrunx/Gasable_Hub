@@ -923,32 +923,47 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 	lang = lang_hint or detect_language(query)
 	context = "\n---\n".join(normalize_text(clean_text(text)) for _, text, _ in context_chunks)
-	# Enforce exact sectioning and tone for UI parity
+	
+	# Get configurable agent role from environment (default: customer care)
+	agent_role = os.getenv("AGENT_ROLE", "customer care assistant")
+	
+	# Build conversational system prompt
 	sys = (
-		"You are Gasable’s official bilingual (English/Arabic) AI assistant. "
-		"Answer as a knowledgeable member of the Gasable team (use 'we/our' where natural). "
-		"Use ONLY the provided context. Do NOT invent facts. Keep phrasing clear, natural, and customer-friendly. "
-		"No meta commentary about being an AI."
+		f"You are Gasable's friendly {agent_role}, powered by AI. "
+		"You're knowledgeable, helpful, and always ready to assist. "
+		"Speak naturally as part of the Gasable team (use 'we/our' when appropriate). "
+		"Use ONLY the information from the provided context. Never invent facts. "
+		"Be warm, professional, and genuinely helpful. "
+		"No meta commentary about being an AI or limitations."
 	)
+	
 	format_spec = (
-		"Output EXACTLY these three sections, in this order, with the exact headings:\n"
-		"Overview\n"
-		"Key points from the provided context\n"
-		"Recommended next steps\n"
+		"Response Format:\n"
+		"1. Start directly with your answer in natural, flowing paragraphs\n"
+		"2. Use bullet points ONLY when listing specific items, products, or steps (not for general structure)\n"
+		"3. Keep the tone conversational and friendly\n"
+		"4. If you need to list things, format them as:\n"
+		"   • Item one\n"
+		"   • Item two\n"
+		"5. End with a warm, engaging question that invites further conversation about their query\n\n"
 		"Rules:\n"
-		"- Write in the user's language.\n"
-		"- Start with a concise paragraph in 'Overview' that reads naturally.\n"
-		"- In 'Key points', prefer short bullets grounded in the context; use bullets only when helpful (otherwise concise sentences).\n"
-		"- In 'Recommended next steps', list action bullets relevant to the question.\n"
-		"- If context is insufficient, say so in 'Overview' but still return the same three sections."
+		"- Write in the user's language\n"
+		"- NO section headers like 'Problem', 'Key evidence', 'Overview', etc.\n"
+		"- Start immediately with helpful information\n"
+		"- Be concise but complete\n"
+		"- Use bullet points sparingly, only for actual lists\n"
+		"- Make the closing question specific to their query, friendly and inviting\n"
+		"- If context is insufficient, acknowledge it naturally within the conversation"
 	)
-	# Domain guardrails for IoT questions: prefer operational specifics if query mentions IoT
-	if any(t in (lang_hint or detect_language(query)) for t in ["ar","en"]):
-		pass
+	
+	# Domain guardrails for IoT questions
 	if re.search(r"\b(iot|internet of things|إنترنت الأشياء|انترنت الاشياء)\b", query, flags=re.IGNORECASE):
 		format_spec += (
-			"\nWhen the question mentions IoT, ensure bullets cover: sensors/meters, connectivity/telemetry, remote monitoring, locks/valves/security, analytics/reports, and integration with operations/logistics."  # noqa: E501
+			"\n\nFor IoT-related queries, naturally mention relevant aspects like: "
+			"sensors/meters, connectivity, remote monitoring, security features, "
+			"analytics/reports, and integration with operations."
 		)
+	
 	# Low-signal fallback guardrail
 	try:
 		best = max(float(s) for (_i, _t, s) in (context_chunks or [])) if context_chunks else 0.0
@@ -956,20 +971,21 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 	except Exception:
 		best = 0.0
 		threshold = 0.25
+	
 	if not context_chunks or best < threshold:
 		return (
-			"Problem — Insufficient context to answer precisely\n\n"
-			"Key evidence (from the provided context)\n"
-			"- No high-confidence matches found in the knowledge base.\n\n"
-			"Recommended next steps\n"
-			"- Refine the question or provide more details.\n"
-			"- Ingest the relevant documents and retry."
+			"I'd love to help you with that! However, I don't currently have enough information "
+			"in my knowledge base to give you a confident answer. "
+			"Could you provide a bit more detail about what you're looking for, or try rephrasing your question? "
+			"I'm here to help and want to make sure I give you the most accurate information possible! "
+			"What specific aspect would you like to know more about?"
 		)
+	
 	resp = client.chat.completions.create(
 		model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
 		messages=[
 			{"role": "system", "content": sys},
-			{"role": "user", "content": f"Language: {lang}\nQuestion: {query}\nContext:\n{context}\n{format_spec}"},
+			{"role": "user", "content": f"Language: {lang}\nQuestion: {query}\n\nContext:\n{context}\n\n{format_spec}"},
 		],
 	)
 	return resp.choices[0].message.content
