@@ -124,39 +124,58 @@ Secrets to add (Cloud Run → Variables & Secrets):
 
 Service account: grant minimum IAM needed (Cloud Run Invoker, Storage access if using GCS). Prefer attaching the runtime service account rather than bundling JSON keys.
 
-### (Optional) Netlify UI
-- This repo includes a Netlify static frontend and Netlify Functions API for a fully serverless setup.
-- Files:
-  - `index.html`, `dashboard.html` – static UI pages
-  - `netlify/functions/api.js` – serverless API (BM25/lexical answer, status, DB stats)
-  - `netlify/functions/query.ts` – vector RAG (embeds with OpenAI → pgvector search → optional LLM answer)
-  - `netlify/functions/query_stream.ts` – streaming hybrid RAG (SSE)
-  - `netlify/functions/health.ts` – health check
-  - `netlify.toml` – routes `/api/*` → `functions/api`
+### MCP (Model Context Protocol)
 
-If you also deploy the Netlify site, set these env vars (Site settings → Build & deploy → Environment):
-- Core
-  - `OPENAI_API_KEY`
-  - `DATABASE_URL` (or `SUPABASE_DB_URL`) – pooled Postgres with pgvector (sslmode required)
-- Vector search / table config
-- `EMBED_MODEL` (set to `text-embedding-3-small`)
-- `EMBED_DIM` (set to `1536`)
-  - `PG_SCHEMA` (default `public`)
-  - `PG_TABLE` (default `gasable_index`)
-- Answer model
-  - `RERANK_MODEL` or `OPENAI_MODEL` (default `gpt-5-mini`; `gpt-4o-mini` also works)
+There are two ways to use tools:
 
-Deploy steps:
-1) Connect GitHub repo to Netlify (done)
-2) Ensure the env vars above are set
-3) Trigger a deploy. Your site serves UI at `/` and `/dashboard`, and the API at `/api/...` via Functions.
+- Native MCP server (stdio): run a local process your MCP client can spawn.
+- HTTP compatibility (Cloud Run): discover tools and invoke via REST for browser integrations.
 
-Notes:
-- Lexical BM25 answer is served via `POST /api/query` (through `functions/api.js`) and is sanitized (HTML/Markdown images/links stripped).
-- Vector+LLM single-shot is served via `POST /.netlify/functions/query`.
-- Streaming hybrid RAG (expansions → dense + lexical → RRF → MMR) is served via `GET /.netlify/functions/query_stream?q=...`.
-- The streaming selector prioritizes `gasable.com` content when available and now selects up to 8 context chunks.
-- Heavy ingestion should run via CLI or the full FastAPI backend (Functions have short timeouts).
+Native MCP (stdio)
+
+Run the MCP server locally:
+```bash
+python -m gasable_hub.server
+```
+The server exposes tools registered under `gasable_hub.tools.*`. Configure your MCP client to spawn the command above and pass env vars for DB and OpenAI keys.
+
+Example client config (pseudo‑JSON):
+```json
+{
+  "name": "gasable-hub",
+  "command": "/usr/bin/python3",
+  "args": ["-m", "gasable_hub.server"],
+  "env": {
+    "DATABASE_URL": "postgresql://.../postgres?sslmode=require",
+    "OPENAI_API_KEY": "<secret>",
+    "OPENAI_MODEL": "gpt-5-mini",
+    "EMBED_MODEL": "text-embedding-3-small",
+    "EMBED_DIM": "1536",
+    "PG_EMBED_COL": "embedding_1536"
+  },
+  "cwd": "/path/to/repo"
+}
+```
+
+Node (spawn stdio MCP):
+```ts
+import { StdioClient } from "@modelcontextprotocol/sdk/client/stdio";
+
+const client = await StdioClient.create({
+  command: "python3",
+  args: ["-m", "gasable_hub.server"],
+  env: { DATABASE_URL: process.env.DATABASE_URL!, OPENAI_API_KEY: process.env.OPENAI_API_KEY! },
+});
+
+const tools = await client.listTools();
+const result = await client.callTool({ name: "ingest_web", arguments: { query: "site:gasable.com", max_results: 5 } });
+console.log(result);
+```
+
+HTTP compatibility (Cloud Run)
+
+- `GET  /api/mcp_tools` → discover tool specs (for UIs)
+- `POST /api/mcp_invoke` → `{ name, args, token }` (set `API_TOKEN` to require a shared secret)
 
 ### Serverless (Netlify Functions, TypeScript) – pgvector RAG API
 - Endpoints:
@@ -189,21 +208,21 @@ This project exposes several knobs via environment variables. Defaults are chose
 
 ### Global/OpenAI
 - `OPENAI_API_KEY` – required for embeddings and LLM answers
-- `OPENAI_EMBED_MODEL` / `EMBED_MODEL` – default `text-embedding-3-large`
+- `OPENAI_EMBED_MODEL` / `EMBED_MODEL` – default `text-embedding-3-small` (1536)
 - `OPENAI_MODEL` / `RERANK_MODEL` – default `gpt-5-mini` (you can use `gpt-4o-mini`)
 
 ### Database (Postgres + pgvector)
 - `DATABASE_URL` (or `SUPABASE_DB_URL`) – pooled URL with SSL
 - `PG_SCHEMA` – default `public`
 - `PG_TABLE` – default `gasable_index`
-- `EMBED_DIM` – default `3072` (must match the dimension used at ingestion)
+- `EMBED_DIM` – default `1536` (must match the dimension used at ingestion)
 
 ### FastAPI (full backend) – Retrieval knobs
 - `RAG_TOP_K` – final context chunks to answer with (default 6)
 - `RAG_K_DENSE_EACH` – vector hits per table before fusion (default 8)
 - `RAG_K_DENSE_FUSE` – cap fused dense candidates (default 10)
-- `RAG_K_LEX` – BM25 candidates per query expansion (default 12)
-- `RAG_CORPUS_LIMIT` – rows per table used to build BM25 cache (default 1200)
+- `RAG_K_LEX` – Lexical SQL FTS candidates per expansion (default 12)
+- `RAG_CORPUS_LIMIT` – (legacy) rows per table used to build BM25 cache (unused in FTS path)
 - `RAG_MMR_LAMBDA` – diversity vs relevance tradeoff (default 0.7)
 - `RAG_EXPANSIONS` – max generated query expansions (default 2)
 - `RAG_BM25_TTL_SEC` – BM25 cache TTL seconds (default 300)

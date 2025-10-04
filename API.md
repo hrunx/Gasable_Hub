@@ -19,6 +19,7 @@ Current production lane
 - Embeddings: 1536‑dim, model `text-embedding-3-small`.
 - Active column: `public.gasable_index.embedding_1536`.
 - Vector ORDER BY uses the operator directly so HNSW index is used.
+- LLM reranker enabled before MMR selection to improve top-k quality.
 
 ---
 
@@ -170,7 +171,7 @@ LIMIT $2;
 
 ## Environment variables (key ones)
 - `DATABASE_URL` (Supabase Postgres; `sslmode=require`)
-- `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_EMBED_MODEL`/`EMBED_MODEL`, `EMBED_DIM`
+- `OPENAI_API_KEY`, `OPENAI_MODEL`, `RERANK_MODEL`, `OPENAI_EMBED_MODEL`/`EMBED_MODEL`, `EMBED_DIM`
 - `PG_EMBED_COL` (production: `embedding_1536`)
 - Retrieval tuning: `RAG_TOP_K`, `RAG_K_DENSE_EACH`, `RAG_K_DENSE_FUSE`, `RAG_K_LEX`, `RAG_KW_PREFILTER_LIMIT`, `RAG_MMR_LAMBDA`, `RAG_BRAND_BOOST_WEIGHT`
 - `API_TOKEN` (optional) – shared secret for `/api/mcp_invoke`

@@ -66,7 +66,7 @@ def _safe_embed_col() -> str:
 	if col in ("embedding", "embedding_1536"):
 		return col
 	# Auto based on dim
-	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
 	return "embedding_1536" if dim == 1536 else "embedding"
 
 
@@ -104,12 +104,14 @@ def get_pg_conn():
 
 def embed_query(q: str) -> list[float]:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-	resp = client.embeddings.create(model=_default_embed_model(), input=q)
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
+	resp = client.embeddings.create(model=_default_embed_model(), input=q, dimensions=dim)
 	return resp.data[0].embedding
 
 
 def upsert_embeddings(docs: list[dict]) -> int:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
 	inserts = 0
 	with get_pg_conn() as conn:
 		with conn.cursor() as cur:
@@ -121,7 +123,7 @@ def upsert_embeddings(docs: list[dict]) -> int:
 				api_key = os.getenv("OPENAI_API_KEY")
 				if api_key:
 					try:
-						emb_resp = client.embeddings.create(model=_default_embed_model(), input=text)
+						emb_resp = client.embeddings.create(model=_default_embed_model(), input=text, dimensions=dim)
 						vec = emb_resp.data[0].embedding
 						vec_str = "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
 						# Choose embedding column dynamically
@@ -429,7 +431,8 @@ def _bm25_search(query: str, k: int = 10) -> list[tuple[str, str, float]]:
 
 def embed_queries(queries: list[str]) -> list[list[float]]:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-	resp = client.embeddings.create(model=_default_embed_model(), input=queries)
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
+	resp = client.embeddings.create(model=_default_embed_model(), input=queries, dimensions=dim)
 	# Preserve order
 	return [d.embedding for d in resp.data]
 
@@ -659,6 +662,41 @@ def _rrf_fuse(result_lists: list[list[dict]], k: int = 60) -> list[dict]:
 	return [meta[key] | {"rrf": val} for key, val in ordered]
 
 
+def _rerank_llm(query: str, candidates: list[dict], top: int = 12) -> list[dict]:
+	"""Optional lightweight LLM reranker over fused candidates.
+
+	Returns the top reranked set (limited to 'top'). Falls back to the first 'top'
+	items on any error or when API key is missing.
+	"""
+	api = os.getenv("OPENAI_API_KEY")
+	if not api or not candidates:
+		return candidates[:top]
+	client = OpenAI(api_key=api)
+	snip = lambda s: normalize_text(s)[:1200]
+	passages = "\n\n".join(f"[{i}] {snip(c.get('text',''))}" for i, c in enumerate(candidates))
+	try:
+		resp = client.chat.completions.create(
+			model=os.getenv("RERANK_MODEL", os.getenv("OPENAI_MODEL", "gpt-5-mini")),
+			temperature=0,
+			messages=[
+				{"role": "system", "content": "Return JSON array of {index:int,score:float in [0,1]}. No prose."},
+				{"role": "user", "content": f"Query: {query}\nPassages:\n{passages}"},
+			],
+		)
+		import json as _json
+		txt = resp.choices[0].message.content or "[]"
+		arr = _json.loads(txt if txt.strip().startswith("[") else "[]")
+		scored = [
+			(candidates[v["index"]] | {"_rr": float(v.get("score", 0))})
+			for v in arr
+			if isinstance(v, dict) and "index" in v and 0 <= v["index"] < len(candidates)
+		]
+		scored.sort(key=lambda x: x.get("_rr", 0), reverse=True)
+		return scored[:top]
+	except Exception:
+		return candidates[:top]
+
+
 def _tokenize_for_similarity(text: str) -> set[str]:
 	if not text:
 		return set()
@@ -771,7 +809,7 @@ def hybrid_search(query: str, top_k: int = 6) -> list[tuple[str, str, float]]:
 	# Lexical results
 	lex_lists: list[list[dict]] = []
 	for q2 in expanded:
-		lex = _bm25_search(q2, k=int(os.getenv("RAG_K_LEX", "12")))
+		lex = bm25_fallback(q2, k=int(os.getenv("RAG_K_LEX", "12")))
 		lex_lists.append([
 			{"source": did.split(":", 1)[0], "id": did.split(":", 1)[1], "text": txt, "score": float(score)}
 			for (did, txt, score) in lex
@@ -787,7 +825,8 @@ def hybrid_search(query: str, top_k: int = 6) -> list[tuple[str, str, float]]:
 	if boost:
 		lists += [boost] * max(1, boost_weight)
 	fused = _rrf_fuse(lists)
-	mmr = _mmr_select(fused, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.7")))
+	reranked = _rerank_llm(query, fused, top=max(top_k, 12))
+	mmr = _mmr_select(reranked, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.7")))
 	# Return as tuples (id, text, score)
 	out: list[tuple[str, str, float]] = []
 	for r in mmr:
@@ -840,6 +879,7 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 		)
 	resp = client.chat.completions.create(
 		model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+		temperature=0,
 		messages=[
 			{"role": "system", "content": sys},
 			{"role": "user", "content": f"Language: {lang}\nQuestion: {query}\nContext:\n{context}\n{format_spec}"},
@@ -924,7 +964,7 @@ async def api_query_stream(request: Request, q: str):
 			start = time.time()
 			lex_lists: list[list[dict]] = []
 			for q2 in expanded:
-				lex = _bm25_search(q2, k=int(os.getenv("RAG_K_LEX", "12")))
+				lex = bm25_fallback(q2, k=int(os.getenv("RAG_K_LEX", "12")))
 				lex_lists.append([
 					{"source": did.split(":", 1)[0], "id": did.split(":", 1)[1], "text": txt, "score": float(score)}
 					for (did, txt, score) in lex
@@ -941,22 +981,14 @@ async def api_query_stream(request: Request, q: str):
 			# Fuse all signals
 			fused = _rrf_fuse(dense_lists + lex_lists + ([lst for lst in kw_lists if lst] if kw_lists else []) + ([boost] if boost else []))
 			yield {"event": "step", "data": json.dumps({"step": "fusion", "candidates": len(fused)})}
-			# Dedup and take top_k
+			# Optional LLM rerank before MMR
 			top_k = int(os.getenv("RAG_TOP_K", "6"))
-			seen: set[str] = set()
-			rows: list[tuple[str, str, float]] = []
-			for r in fused:
-				norm = normalize_text(r.get("text", ""))
-				if not norm:
-					continue
-				key = norm[:256]
-				if key in seen:
-					continue
-				seen.add(key)
-				rows.append((f"{r['source']}:{r['id']}", r["text"], float(r.get("score", 0.0))))
-				if len(rows) >= top_k:
-					break
-			yield {"event": "step", "data": json.dumps({"step": "selected_context", "count": len(rows)})}
+			reranked = _rerank_llm(q, fused, top=max(top_k, 12))
+			yield {"event": "step", "data": json.dumps({"step": "rerank", "candidates": len(reranked)})}
+			# MMR selection with diversity
+			mmr = _mmr_select(reranked, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.7")))
+			yield {"event": "step", "data": json.dumps({"step": "selection", "count": len(mmr)})}
+			rows = [(f"{r['source']}:{r['id']}", r.get("text", ""), float(r.get("score", 0.0))) for r in mmr]
 			# Answer
 			start = time.time()
 			answer = generate_answer_robust(q, rows, lang_hint=lang)
