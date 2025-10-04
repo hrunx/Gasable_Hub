@@ -237,12 +237,71 @@
       transition: all 0.2s;
     }
     
+    .connection-item {
+      cursor: pointer;
+      user-select: none;
+    }
+    
     .connection-item:hover {
       background: rgba(51, 65, 85, 0.5);
     }
     
     .connection-item.healthy {
       border-left-color: #10b981;
+    }
+    
+    .connection-details-container {
+      margin-bottom: 10px;
+      animation: slideDown 0.3s ease-out;
+    }
+    
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    .connection-expanded {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: -8px;
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
+    }
+    
+    .detail-row {
+      padding: 8px 0;
+      font-size: 13px;
+      color: #cbd5e1;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .detail-row:last-child {
+      border-bottom: none;
+    }
+    
+    .detail-row strong {
+      color: #94a3b8;
+      margin-right: 12px;
+      min-width: 140px;
+    }
+    
+    .detail-row.error-detail {
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.1);
+      padding: 10px;
+      border-radius: 6px;
+      margin-top: 8px;
     }
     
     .connection-item.warning {
@@ -889,36 +948,84 @@ Index: HNSW (cosine similarity)
         const mcpCheck = await fetch('/api/mcp_tools');
         const mcpData = await mcpCheck.json();
         
-        // Render connections
+        // Get model info from environment or default
+        const modelName = 'gpt-5-mini'; // From webapp.py default
+        
+        // Build connections with detailed info
+        const dbHealthy = dbData.db?.status === 'ok' || dbData.db?.status === 'healthy';
+        const dbError = dbData.db?.error || 'Unknown error';
+        const embedCol = dbData.embedding_col || dbData.active_embed_col || 'embedding_1536';
+        
         const connections = [
           {
+            id: 'db',
             icon: '💾',
             name: 'PostgreSQL Database',
-            status: dbData.db_ok ? 'healthy' : 'error',
-            detail: dbData.db_ok ? `Connected • ${dbData.active_embed_col || 'embedding_1536'}` : 'Connection failed'
+            status: dbHealthy ? 'healthy' : 'error',
+            detail: dbHealthy ? `Connected • ${embedCol}` : `Connection failed`,
+            expanded: `
+              <div class="connection-expanded">
+                <div class="detail-row"><strong>Status:</strong> ${dbHealthy ? '✓ Connected' : '✗ ' + dbError}</div>
+                <div class="detail-row"><strong>Active Column:</strong> ${embedCol}</div>
+                <div class="detail-row"><strong>Dimension:</strong> ${embedCol === 'embedding_1536' ? '1536' : '3072'}</div>
+                <div class="detail-row"><strong>Index Type:</strong> HNSW (cosine similarity)</div>
+                <div class="detail-row"><strong>Schema:</strong> public.gasable_index</div>
+                ${!dbHealthy ? `<div class="detail-row error-detail"><strong>Error:</strong> ${dbError}</div>` : ''}
+              </div>
+            `
           },
           {
+            id: 'openai',
             icon: '🤖',
             name: 'OpenAI API',
             status: 'healthy',
-            detail: 'Connected • GPT-4 + Embeddings'
+            detail: `Connected • ${modelName} + Embeddings`,
+            expanded: `
+              <div class="connection-expanded">
+                <div class="detail-row"><strong>Chat Model:</strong> ${modelName}</div>
+                <div class="detail-row"><strong>Embed Model:</strong> text-embedding-3-small</div>
+                <div class="detail-row"><strong>Embed Dimension:</strong> 1536</div>
+                <div class="detail-row"><strong>Context Window:</strong> 128K tokens</div>
+                <div class="detail-row"><strong>Features:</strong> RAG, Reranking, MMR</div>
+              </div>
+            `
           },
           {
+            id: 'mcp',
             icon: '🔧',
             name: 'MCP Tools',
             status: mcpData.tools?.length > 0 ? 'healthy' : 'warning',
-            detail: `${mcpData.tools?.length || 0} tools registered`
+            detail: `${mcpData.tools?.length || 0} tools registered`,
+            expanded: `
+              <div class="connection-expanded">
+                <div class="detail-row"><strong>Total Tools:</strong> ${mcpData.tools?.length || 0}</div>
+                <div class="detail-row"><strong>Protocol:</strong> MCP over HTTP</div>
+                <div class="detail-row"><strong>Endpoint:</strong> /api/mcp_invoke</div>
+                <div class="detail-row"><strong>Features:</strong> RAG Search, DB Health, Ingest Tools</div>
+                <div class="detail-row"><strong>Authentication:</strong> API Token Required</div>
+              </div>
+            `
           },
           {
+            id: 'api',
             icon: '🌐',
             name: 'API Server',
             status: 'healthy',
-            detail: 'FastAPI • Port 8000'
+            detail: 'FastAPI • Port 8000',
+            expanded: `
+              <div class="connection-expanded">
+                <div class="detail-row"><strong>Framework:</strong> FastAPI + Uvicorn</div>
+                <div class="detail-row"><strong>Port:</strong> 8000</div>
+                <div class="detail-row"><strong>CORS:</strong> Enabled</div>
+                <div class="detail-row"><strong>Endpoints:</strong> 20+ routes</div>
+                <div class="detail-row"><strong>Streaming:</strong> SSE Support</div>
+              </div>
+            `
           }
         ];
         
         container.innerHTML = connections.map(conn => `
-          <div class="connection-item ${conn.status}">
+          <div class="connection-item ${conn.status}" data-connection-id="${conn.id}" onclick="toggleConnection('${conn.id}')">
             <div class="connection-info">
               <div class="connection-icon">${conn.icon}</div>
               <div class="connection-details">
@@ -931,6 +1038,9 @@ Index: HNSW (cosine similarity)
               <span>${conn.status === 'healthy' ? 'Healthy' : conn.status === 'warning' ? 'Warning' : 'Error'}</span>
             </div>
           </div>
+          <div class="connection-details-container" id="details-${conn.id}" style="display: none;">
+            ${conn.expanded}
+          </div>
         `).join('');
         
         // Update system status
@@ -941,6 +1051,22 @@ Index: HNSW (cosine similarity)
           
       } catch (error) {
         console.error('Failed to load connections:', error);
+      }
+    }
+    
+    // Toggle connection details
+    function toggleConnection(id) {
+      const detailsEl = document.getElementById(`details-${id}`);
+      const isVisible = detailsEl.style.display !== 'none';
+      
+      // Close all other details
+      document.querySelectorAll('.connection-details-container').forEach(el => {
+        el.style.display = 'none';
+      });
+      
+      // Toggle this one
+      if (!isVisible) {
+        detailsEl.style.display = 'block';
       }
     }
     
