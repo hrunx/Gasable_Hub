@@ -677,7 +677,6 @@ def _rerank_llm(query: str, candidates: list[dict], top: int = 12) -> list[dict]
 	try:
 		resp = client.chat.completions.create(
 			model=os.getenv("RERANK_MODEL", os.getenv("OPENAI_MODEL", "gpt-5-mini")),
-			temperature=0,
 			messages=[
 				{"role": "system", "content": "Return JSON array of {index:int,score:float in [0,1]}. No prose."},
 				{"role": "user", "content": f"Query: {query}\nPassages:\n{passages}"},
@@ -879,7 +878,6 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 		)
 	resp = client.chat.completions.create(
 		model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-		temperature=0,
 		messages=[
 			{"role": "system", "content": sys},
 			{"role": "user", "content": f"Language: {lang}\nQuestion: {query}\nContext:\n{context}\n{format_spec}"},
