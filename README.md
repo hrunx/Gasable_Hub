@@ -1,14 +1,14 @@
-# Gasable Hub – RAG API and Ingestion
+# Gasable Hub – RAG API and Ingestion (Google Cloud Run)
 
-### What this hub does (for non‑technical readers)
+### What this hub does (for business)
 - **All your energy intelligence in one place**: We collected Gasable’s documents (PDF/DOCX/TXT), key web pages, and research, then indexed them into a searchable knowledge base.
 - **Understands Arabic + English**: High‑quality PDF extraction (Arabic included) with OCR fallback for scans.
 - **Answers like a consultant**: The chatbot retrieves the most relevant evidence and answers with a clear structure: customer needs, supporting facts, and recommended next steps.
-- **Works from anywhere**: A serverless UI (Netlify) and API endpoints let you use the hub from the web and integrate it into your own apps.
+- **Works from anywhere**: A Cloud Run API (and optional static UI) lets you use the hub from the web and integrate it into internal tools.
 
 In short: it’s a robust, bilingual knowledge hub that helps you find facts fast, justify decisions, and move to action.
 
-## Quick Start
+## Quick Start (local)
 
 - Requirements: Python 3.11+, PostgreSQL 14+ with `pgvector`, optional Docker for Firecrawl OS.
 - Install deps:
@@ -17,18 +17,20 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-- Database: enable pgvector and table (if not already present):
+- Database: enable pgvector and table (if not already present). We standardize on 1536‑dim embeddings in `embedding_1536`.
 ```sql
 -- in psql connected to your DB
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS public.gasable_index (
   node_id TEXT PRIMARY KEY,
   text TEXT,
-  embedding vector(3072), -- OpenAI text-embedding-3-large
+  embedding vector(3072), -- legacy column may exist
+  embedding_1536 vector(1536), -- production lane
   li_metadata JSONB DEFAULT '{}'::jsonb
 );
-CREATE INDEX IF NOT EXISTS gasable_index_embedding_hnsw
-  ON public.gasable_index USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX IF NOT EXISTS gasable_idx_1536_hnsw
+  ON public.gasable_index USING hnsw (embedding_1536 vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX IF NOT EXISTS gasable_index_tsv_idx ON public.gasable_index USING gin(tsv);
 ```
 - Configure environment (copy and edit):
 ```bash
@@ -38,9 +40,10 @@ CREATE INDEX IF NOT EXISTS gasable_index_embedding_hnsw
 ```
 Key environment variables:
 - `OPENAI_API_KEY`: for embeddings and answers
-- `OPENAI_EMBED_MODEL` (default `text-embedding-3-large`)
+- `OPENAI_EMBED_MODEL` (production `text-embedding-3-small`)
 - `OPENAI_MODEL` (default `gpt-5-mini`)
 - `PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`, `PG_DBNAME`
+- `PG_EMBED_COL` (production: `embedding_1536`)
 - `CORS_ORIGINS` (comma-separated list or `*`)
 - `CHUNK_CHARS` (default 4000)
 - RAG tuning: `RAG_TOP_K` (6), `RAG_K_DENSE_EACH` (8), `RAG_K_DENSE_FUSE` (10), `RAG_K_LEX` (12), `RAG_CORPUS_LIMIT` (1200), `RAG_MMR_LAMBDA` (0.7)
@@ -108,10 +111,10 @@ gcloud run deploy gasable-hub \
   --max-instances 10 \
   --concurrency 80
 
-# Set env vars (example)
+# Set env vars (example – production lane 1536)
 gcloud run services update gasable-hub \
   --region europe-west1 \
-  --set-env-vars OPENAI_API_KEY=__SET_IN_CONSOLE__,DATABASE_URL=__SET_IN_CONSOLE__,CORS_ORIGINS=*
+  --set-env-vars OPENAI_API_KEY=__SET_IN_CONSOLE__,DATABASE_URL=__SET_IN_CONSOLE__,CORS_ORIGINS=*,PG_EMBED_COL=embedding_1536,EMBED_DIM=1536,OPENAI_EMBED_MODEL=text-embedding-3-small
 ```
 
 Secrets to add (Cloud Run → Variables & Secrets):
@@ -121,7 +124,7 @@ Secrets to add (Cloud Run → Variables & Secrets):
 
 Service account: grant minimum IAM needed (Cloud Run Invoker, Storage access if using GCS). Prefer attaching the runtime service account rather than bundling JSON keys.
 
-### Serverless (Netlify) deployment – UI + API Functions
+### (Optional) Netlify UI
 - This repo includes a Netlify static frontend and Netlify Functions API for a fully serverless setup.
 - Files:
   - `index.html`, `dashboard.html` – static UI pages
@@ -131,13 +134,13 @@ Service account: grant minimum IAM needed (Cloud Run Invoker, Storage access if 
   - `netlify/functions/health.ts` – health check
   - `netlify.toml` – routes `/api/*` → `functions/api`
 
-Set these Netlify environment variables (Site settings → Build & deploy → Environment):
+If you also deploy the Netlify site, set these env vars (Site settings → Build & deploy → Environment):
 - Core
   - `OPENAI_API_KEY`
   - `DATABASE_URL` (or `SUPABASE_DB_URL`) – pooled Postgres with pgvector (sslmode required)
 - Vector search / table config
-  - `EMBED_MODEL` (default `text-embedding-3-large`)
-  - `EMBED_DIM` (default `3072`)
+- `EMBED_MODEL` (set to `text-embedding-3-small`)
+- `EMBED_DIM` (set to `1536`)
   - `PG_SCHEMA` (default `public`)
   - `PG_TABLE` (default `gasable_index`)
 - Answer model
@@ -390,11 +393,28 @@ ev.onmessage = (e) => console.log(e.data);
 
 ## Deployment Notes
 
-- Netlify Functions mode (UI+API): set DB env vars on Netlify; ingestion should be done via CLI or the full API backend.
-- Full API backend: bind to `0.0.0.0` and place behind Nginx/Caddy; use HTTPS.
+- Cloud Run API is the primary production path; ensure envs match the 1536 lane.
+- Full API backend locally: bind to `0.0.0.0` and place behind Nginx/Caddy; use HTTPS if exposed.
 - Set `CORS_ORIGINS` to your chatbot domain(s) for browser usage.
 - Secure DB: private network/VPC, least-privilege DB user.
 - Tune pgvector index: adjust `lists` and consider `ANALYZE public.gasable_index;` after large ingests.
+
+## API quick reference (Cloud Run)
+
+Base: `https://<your-run-url>`
+
+- Health
+  - `GET /health` – liveness
+  - `GET /api/status` – DB health, active embedding column
+- Query
+  - `POST /api/query` – `{ q }` → returns structured `answer` + `answer_html`
+  - `GET  /api/query_stream?q=...` – streaming SSE with progress steps and final answer
+- Ingestion
+  - `POST /api/ingest_web` – `{ query, max_results?, allow_domains? }`
+  - `POST /api/ingest_drive` – `{ folder_id }`
+- Tools (token-protected)
+  - `GET /api/mcp_tools`
+  - `POST /api/mcp_invoke` – `{ name, args, token }`
 
 ## Troubleshooting
 
