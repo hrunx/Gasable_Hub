@@ -9,6 +9,13 @@ from dotenv import load_dotenv
 from gasable_hub.ingestion import local as local_ing
 from gasable_hub.db.postgres import connect as pg_connect, run_migrations
 from llama_index.embeddings.openai import OpenAIEmbedding
+def _safe_embed_col() -> str:
+    col = (os.getenv("PG_EMBED_COL") or "").strip()
+    if col in ("embedding", "embedding_1536"):
+        return col
+    dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
+    return "embedding_1536" if dim == 1536 else "embedding"
+
 
 try:
 	# Optional helpers for starting Postgres and applying SQL migrations via psql
@@ -112,6 +119,7 @@ def ingest_path_with_llamaindex(
 
 	with pg_connect() as conn:
 		with conn.cursor() as cur:
+			col = _safe_embed_col()
 			existing_ids: set[str] = set()
 			if resume:
 				try:
@@ -146,14 +154,24 @@ def ingest_path_with_llamaindex(
 						clean_chunk = "".join(ch if ord(ch) >= 32 or ch in "\n\t" else " " for ch in clean_chunk)
 						vec = embedder.get_text_embedding(clean_chunk)
 						vec_str = "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
-						cur.execute(
-							"""
-							INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
-							VALUES (%s, %s, %s::vector, '{}'::jsonb)
-							ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding=EXCLUDED.embedding
-							""",
-							(doc_id, clean_chunk, vec_str),
-						)
+						if col == "embedding_1536":
+							cur.execute(
+								"""
+								INSERT INTO public.gasable_index (node_id, text, embedding_1536, li_metadata)
+								VALUES (%s, %s, %s::vector, '{}'::jsonb)
+								ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding_1536=EXCLUDED.embedding_1536
+								""",
+								(doc_id, clean_chunk, vec_str),
+							)
+						else:
+							cur.execute(
+								"""
+								INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
+								VALUES (%s, %s, %s::vector, '{}'::jsonb)
+								ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding=EXCLUDED.embedding
+								""",
+								(doc_id, clean_chunk, vec_str),
+							)
 						inserted_rows += 1
 						if inserted_rows % 50 == 0:
 							conn.commit()

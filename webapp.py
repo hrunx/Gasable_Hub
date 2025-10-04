@@ -179,46 +179,42 @@ def vector_search(query_embedding: list[float], k: int = 5):
 					"""
 					SELECT node_id, text, 1 - (embedding_1536 <=> %s::vector) AS similarity
 					FROM public.gasable_index
-					ORDER BY similarity DESC
+					ORDER BY embedding_1536 <=> %s::vector
 					LIMIT %s
 					""",
-					(pgvec, k),
+					(pgvec, pgvec, k),
 				)
 			else:
 				cur.execute(
 					"""
 					SELECT node_id, text, 1 - (embedding <=> %s::vector) AS similarity
 					FROM public.gasable_index
-					ORDER BY similarity DESC
+					ORDER BY embedding <=> %s::vector
 					LIMIT %s
 					""",
-					(pgvec, k),
+					(pgvec, pgvec, k),
 				)
 			return cur.fetchall()
 
 
 def bm25_fallback(query: str, k: int = 5):
-	# Retained for compatibility; superseded by hybrid_search
+	# Replaced with SQL FTS over generated tsvector for stability and coverage
 	with get_pg_conn() as conn:
 		with conn.cursor() as cur:
-			cur.execute("SELECT node_id, text FROM public.gasable_index LIMIT 1000")
+			cur.execute(
+				"""
+				SELECT node_id,
+				       left(coalesce(text,''), 2000) as txt,
+				       ts_rank_cd(tsv, plainto_tsquery('simple', %s)) as rank
+				FROM public.gasable_index
+				WHERE tsv @@ plainto_tsquery('simple', %s)
+				ORDER BY rank DESC
+				LIMIT %s
+				""",
+				(query, query, k),
+			)
 			rows = cur.fetchall()
-	if not rows:
-		return []
-	texts = [t or "" for _, t in rows]
-	tokenized = [t.split() for t in texts]
-	filtered = [(rows[i], toks) for i, toks in enumerate(tokenized) if len(toks) > 0]
-	if not filtered:
-		return []
-	kept_rows, kept_tokens = zip(*filtered)
-	bm25 = BM25Okapi(list(kept_tokens))
-	q_tokens = query.split()
-	if not q_tokens:
-		return []
-	scores = bm25.get_scores(q_tokens)
-	pairs = list(zip(kept_rows, scores))
-	pairs.sort(key=lambda x: x[1], reverse=True)
-	return [(node, text, float(score)) for ((node, text), score) in pairs[:k]]
+	return [(r[0], r[1], float(r[2])) for r in rows]
 
 
 # --- Robust multilingual hybrid RAG helpers ---
@@ -302,6 +298,48 @@ def markdown_to_html_simple(md: str) -> str:
 	return "\n".join(parts)
 
 
+def normalize_answer_format(ans: str) -> str:
+	"""Force bullet formatting in 'Key evidence' and 'Recommended next steps' sections.
+
+	- Ensures lines under these headings start with a bullet marker so the simple
+	  Markdown -> HTML converter renders them as lists.
+	- Keeps existing bullets intact.
+	"""
+	if not ans:
+		return ""
+	lines = ans.splitlines()
+	out: list[str] = []
+	mode: str | None = None
+	for raw in lines:
+		ln = raw.rstrip()
+		check = ln.strip().lower()
+		if not check:
+			out.append(ln)
+			continue
+		if check.startswith("problem —") or check.startswith("problem -") or check == "problem":
+			mode = None
+			out.append(ln)
+			continue
+		if check.startswith("key evidence"):
+			mode = "evidence"
+			# Normalize heading form
+			out.append("Key evidence (from the provided context)")
+			continue
+		if check.startswith("recommended next steps"):
+			mode = "steps"
+			out.append("Recommended next steps")
+			continue
+		if mode in ("evidence", "steps"):
+			# Ensure bullet marker for list items
+			if not ln.lstrip().startswith(("- ", "• ")):
+				out.append("- " + ln.strip())
+			else:
+				out.append(ln)
+		else:
+			out.append(ln)
+	return "\n".join(out)
+
+
 def _vec_to_pg(vec: list[float]) -> str:
 	return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
 
@@ -311,8 +349,17 @@ def _load_corpus(limit_per_table: int = 1500) -> list[tuple[str, str]]:
 	items: list[tuple[str, str]] = []
 	with get_pg_conn() as conn:
 		with conn.cursor() as cur:
-			# gasable_index
-			cur.execute("SELECT node_id, COALESCE(text,'') FROM public.gasable_index LIMIT %s", (limit_per_table,))
+			# gasable_index (stable ordering; ignore empty text)
+			cur.execute(
+				"""
+				SELECT node_id, COALESCE(text,'')
+				FROM public.gasable_index
+				WHERE text IS NOT NULL AND text <> ''
+				ORDER BY node_id
+				LIMIT %s
+				""",
+				(limit_per_table,),
+			)
 			for r in cur.fetchall():
 				items.append((f"gasable_index:{r[0]}", clean_text(r[1])))
 			# documents
@@ -401,10 +448,10 @@ def _vector_search_combined(query_vec: list[float], k_each: int = 10) -> list[di
 					SELECT 'gasable_index' AS source, node_id AS id, COALESCE(text,'') AS text,
 					       1 - (embedding_1536 <=> %s::vector) AS score
 					FROM public.gasable_index
-					ORDER BY score DESC
+					ORDER BY embedding_1536 <=> %s::vector
 					LIMIT %s
 					""",
-					(pgvec, k_each),
+					(pgvec, pgvec, k_each),
 				)
 			else:
 				cur.execute(
@@ -412,10 +459,10 @@ def _vector_search_combined(query_vec: list[float], k_each: int = 10) -> list[di
 					SELECT 'gasable_index' AS source, node_id AS id, COALESCE(text,'') AS text,
 					       1 - (embedding <=> %s::vector) AS score
 					FROM public.gasable_index
-					ORDER BY score DESC
+					ORDER BY embedding <=> %s::vector
 					LIMIT %s
 					""",
-					(pgvec, k_each),
+					(pgvec, pgvec, k_each),
 				)
 			for r in cur.fetchall():
 				results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
@@ -775,6 +822,22 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 		format_spec += (
 			"\nWhen the question mentions IoT, ensure bullets cover: sensors/meters, connectivity/telemetry, remote monitoring, locks/valves/security, analytics/reports, and integration with operations/logistics."  # noqa: E501
 		)
+	# Low-signal fallback guardrail
+	try:
+		best = max(float(s) for (_i, _t, s) in (context_chunks or [])) if context_chunks else 0.0
+		threshold = float(os.getenv("RAG_SCORE_THRESHOLD", "0.25"))
+	except Exception:
+		best = 0.0
+		threshold = 0.25
+	if not context_chunks or best < threshold:
+		return (
+			"Problem — Insufficient context to answer precisely\n\n"
+			"Key evidence (from the provided context)\n"
+			"- No high-confidence matches found in the knowledge base.\n\n"
+			"Recommended next steps\n"
+			"- Refine the question or provide more details.\n"
+			"- Ingest the relevant documents and retry."
+		)
 	resp = client.chat.completions.create(
 		model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
 		messages=[
@@ -824,6 +887,7 @@ async def api_query(payload: dict):
 		trace.add("retrieval_done", {"num_chunks": len(rows)}, t0)
 		t0 = time.time()
 		answer = generate_answer_robust(q, rows, lang_hint=lang)
+		answer = normalize_answer_format(answer)
 		trace.add("answer_generated", {"chars": len(answer or "")}, t0)
 		# Produce a simple HTML for UI
 		answer_html = markdown_to_html_simple(answer)
@@ -896,6 +960,7 @@ async def api_query_stream(request: Request, q: str):
 			# Answer
 			start = time.time()
 			answer = generate_answer_robust(q, rows, lang_hint=lang)
+			answer = normalize_answer_format(answer)
 			answer_html = markdown_to_html_simple(answer)
 			ctx_ids = [cid for (cid, _t, _s) in rows]
 			yield {"event": "final", "data": json.dumps({"answer": answer, "answer_html": answer_html, "context_ids": ctx_ids, "ms": int((time.time()-start)*1000)})}
