@@ -34,11 +34,15 @@ from gasable_hub.ingestion.web import (
 from gasable_hub.ingestion.indexer import index_documents
 from sse_starlette.sse import EventSourceResponse
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Load local environment variables for development parity
+load_dotenv(override=True)
 
 # CORS for external chatbot/frontends
 _cors_env = os.getenv("CORS_ORIGINS", "*").strip()
@@ -301,14 +305,14 @@ def markdown_to_html_simple(md: str) -> str:
 
 
 def normalize_answer_format(ans: str) -> str:
-	"""Force bullet formatting in 'Key evidence' and 'Recommended next steps' sections.
+	"""Prefer preserving author formatting; optional bullet normalization via env.
 
-	- Ensures lines under these headings start with a bullet marker so the simple
-	  Markdown -> HTML converter renders them as lists.
-	- Keeps existing bullets intact.
+	If RAG_FORCE_BULLETS=true, add bullet markers under evidence/steps.
 	"""
 	if not ans:
 		return ""
+	if str(os.getenv("RAG_FORCE_BULLETS", "false")).lower() != "true":
+		return ans.strip()
 	lines = ans.splitlines()
 	out: list[str] = []
 	mode: str | None = None
@@ -318,21 +322,19 @@ def normalize_answer_format(ans: str) -> str:
 		if not check:
 			out.append(ln)
 			continue
-		if check.startswith("problem —") or check.startswith("problem -") or check == "problem":
+		if check.startswith("overview") or check.startswith("problem —") or check.startswith("problem -") or check == "problem":
 			mode = None
 			out.append(ln)
 			continue
-		if check.startswith("key evidence"):
+		if check.startswith("key evidence") or check.startswith("key points"):
 			mode = "evidence"
-			# Normalize heading form
-			out.append("Key evidence (from the provided context)")
+			out.append("Key points")
 			continue
 		if check.startswith("recommended next steps"):
 			mode = "steps"
 			out.append("Recommended next steps")
 			continue
 		if mode in ("evidence", "steps"):
-			# Ensure bullet marker for list items
 			if not ln.lstrip().startswith(("- ", "• ")):
 				out.append("- " + ln.strip())
 			else:
