@@ -8,6 +8,8 @@ Base URL
 ```bash
 export BASE=https://chart-gasable-hub-3644-zg474t2vda-ew.a.run.app
 ```
+API_TOKEN= `ak_gasablehub-pq7X-55-L0hrn4da2goat0-hehe-3MZ`
+
 
 Auth
 - Most endpoints are open for GET/POST (public ingress). You can restrict via Cloud Run IAM if desired.
@@ -177,7 +179,3 @@ LIMIT $2;
 - `API_TOKEN` (optional) – shared secret for `/api/mcp_invoke`
 - `CORS_ORIGINS` – allowed origins for browser apps (e.g., `https://app.gasable.com, https://intranet.gasable.local`)
 
-Security notes
-- Prefer restricting Cloud Run ingress and/or requiring IAM identity tokens for sensitive endpoints.
-- When exposing `/api/mcp_invoke`, set `API_TOKEN` and require the `token` in the request body.
-- You can harden further by checking `Authorization: Bearer` headers or enabling Cloud Run IAM auth.

@@ -305,14 +305,13 @@ def markdown_to_html_simple(md: str) -> str:
 
 
 def normalize_answer_format(ans: str) -> str:
-	"""Prefer preserving author formatting; optional bullet normalization via env.
+	"""Prefer preserving author formatting; normalize headings to friendly form.
 
-	If RAG_FORCE_BULLETS=true, add bullet markers under evidence/steps.
+	If RAG_FORCE_BULLETS=true, add bullet markers under evidence/steps; otherwise
+	keep author's choice of paragraphs vs bullets.
 	"""
 	if not ans:
 		return ""
-	if str(os.getenv("RAG_FORCE_BULLETS", "false")).lower() != "true":
-		return ans.strip()
 	lines = ans.splitlines()
 	out: list[str] = []
 	mode: str | None = None
@@ -322,25 +321,110 @@ def normalize_answer_format(ans: str) -> str:
 		if not check:
 			out.append(ln)
 			continue
+		# Normalize section headings to friendlier labels
 		if check.startswith("overview") or check.startswith("problem —") or check.startswith("problem -") or check == "problem":
 			mode = None
-			out.append(ln)
+			out.append("Overview")
 			continue
-		if check.startswith("key evidence") or check.startswith("key points"):
+		if check.startswith("key evidence") or check.startswith("key points from the provided context") or check.startswith("key points"):
 			mode = "evidence"
-			out.append("Key points")
+			out.append("Key points from the provided context")
 			continue
 		if check.startswith("recommended next steps"):
 			mode = "steps"
 			out.append("Recommended next steps")
 			continue
-		if mode in ("evidence", "steps"):
+		# Optionally force bullets only within lists
+		if mode in ("evidence", "steps") and str(os.getenv("RAG_FORCE_BULLETS", "false")).lower() == "true":
 			if not ln.lstrip().startswith(("- ", "• ")):
 				out.append("- " + ln.strip())
 			else:
 				out.append(ln)
 		else:
 			out.append(ln)
+	return "\n".join(out)
+
+
+def _postprocess_answer_paragraph_first(ans: str) -> str:
+	"""Bias final formatting toward paragraph-first with minimal bullets.
+
+	- Normalize headings to friendly form
+	- Overview: always a paragraph (merge bullets if present)
+	- Key points: keep up to 3 bullets; otherwise convert to a concise paragraph
+	- Next steps: keep bullets as provided
+	"""
+	if not ans:
+		return ""
+	text = normalize_answer_format(ans)
+	lines = text.splitlines()
+	out: list[str] = []
+	section: str | None = None
+	buffer: list[str] = []
+
+	def is_heading(s: str) -> str | None:
+		low = s.strip().lower()
+		if low == "overview":
+			return "overview"
+		if low.startswith("key points from the provided context"):
+			return "key"
+		if low.startswith("recommended next steps"):
+			return "steps"
+		return None
+
+	def flush(sec: str | None, buf: list[str]) -> None:
+		if sec is None or not buf:
+			for b in buf:
+				out.append(b)
+			return
+		if sec == "overview":
+			parts = [re.sub(r"^\s*[-•]\s+", "", b).strip() for b in buf if b.strip()]
+			para = " ".join(parts)
+			if para:
+				out.append(para)
+			return
+		if sec == "key":
+			items = [b for b in buf if b.strip()]
+			bul = [b for b in items if b.lstrip().startswith(("- ", "• "))]
+			if not bul:
+				para = " ".join([re.sub(r"^\s*[-•]\s+", "", b).strip() for b in items])
+				if para:
+					out.append(para)
+			else:
+				if len(bul) <= 3:
+					for b in bul:
+						if not b.lstrip().startswith(("- ", "• ")):
+							out.append("- " + b.strip())
+						else:
+							out.append(b)
+				else:
+					parts = [re.sub(r"^\s*[-•]\s+", "", b).strip() for b in bul]
+					para = "; ".join([p for p in parts if p])
+					if para and not para.endswith("."):
+						para += "."
+					if para:
+						out.append(para)
+			return
+		# steps: keep as-is
+		for b in buf:
+			out.append(b)
+
+	for ln in lines:
+		h = is_heading(ln)
+		if h is not None:
+			flush(section, buffer)
+			buffer = []
+			section = h
+			# Normalize back the canonical heading label
+			if h == "overview":
+				out.append("Overview")
+			elif h == "key":
+				out.append("Key points from the provided context")
+			else:
+				out.append("Recommended next steps")
+			continue
+		buffer.append(ln)
+	# flush remaining
+	flush(section, buffer)
 	return "\n".join(out)
 
 
@@ -841,19 +925,22 @@ def generate_answer_robust(query: str, context_chunks: list[tuple[str, str, floa
 	context = "\n---\n".join(normalize_text(clean_text(text)) for _, text, _ in context_chunks)
 	# Enforce exact sectioning and tone for UI parity
 	sys = (
-		"You are a precise bilingual (English/Arabic) assistant for Gasable. "
-		"Use ONLY the provided context. Do NOT invent facts. Keep phrasing clear and business-like."
+		"You are Gasable’s official bilingual (English/Arabic) AI assistant. "
+		"Answer as a knowledgeable member of the Gasable team (use 'we/our' where natural). "
+		"Use ONLY the provided context. Do NOT invent facts. Keep phrasing clear, natural, and customer-friendly. "
+		"No meta commentary about being an AI."
 	)
 	format_spec = (
 		"Output EXACTLY these three sections, in this order, with the exact headings:\n"
-		"Problem — customer need summary\n"
-		"Key evidence (from the provided context)\n"
+		"Overview\n"
+		"Key points from the provided context\n"
 		"Recommended next steps\n"
 		"Rules:\n"
 		"- Write in the user's language.\n"
-		"- Under 'Key evidence', use short bullet points grounded in the context (no links, no images).\n"
-		"- Under 'Recommended next steps', list action bullets relevant to the question.\n"
-		"- If context is insufficient, the 'Problem' line may note that explicitly, but still follow the exact 3-section format."
+		"- Start with a concise paragraph in 'Overview' that reads naturally.\n"
+		"- In 'Key points', prefer short bullets grounded in the context; use bullets only when helpful (otherwise concise sentences).\n"
+		"- In 'Recommended next steps', list action bullets relevant to the question.\n"
+		"- If context is insufficient, say so in 'Overview' but still return the same three sections."
 	)
 	# Domain guardrails for IoT questions: prefer operational specifics if query mentions IoT
 	if any(t in (lang_hint or detect_language(query)) for t in ["ar","en"]):
@@ -927,7 +1014,7 @@ async def api_query(payload: dict):
 		trace.add("retrieval_done", {"num_chunks": len(rows)}, t0)
 		t0 = time.time()
 		answer = generate_answer_robust(q, rows, lang_hint=lang)
-		answer = normalize_answer_format(answer)
+		answer = _postprocess_answer_paragraph_first(answer)
 		trace.add("answer_generated", {"chars": len(answer or "")}, t0)
 		# Produce a simple HTML for UI
 		answer_html = markdown_to_html_simple(answer)
@@ -992,7 +1079,7 @@ async def api_query_stream(request: Request, q: str):
 			# Answer
 			start = time.time()
 			answer = generate_answer_robust(q, rows, lang_hint=lang)
-			answer = normalize_answer_format(answer)
+			answer = _postprocess_answer_paragraph_first(answer)
 			answer_html = markdown_to_html_simple(answer)
 			ctx_ids = [cid for (cid, _t, _s) in rows]
 			yield {"event": "final", "data": json.dumps({"answer": answer, "answer_html": answer_html, "context_ids": ctx_ids, "ms": int((time.time()-start)*1000)})}
