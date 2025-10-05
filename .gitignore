@@ -26,3 +26,7 @@ exports/
 # Netlify
 .netlify/
 .next/
+out/
+gen-lang-client*.json
+uvicorn.out
+uvicorn_*.out
