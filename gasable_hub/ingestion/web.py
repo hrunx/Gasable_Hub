@@ -160,7 +160,7 @@ def extract_with_bs4(url: str) -> Tuple[str, str]:
 
 
 def extract_with_firecrawl(url: str) -> Tuple[str, str]:
-	"""Return (title, text) via Firecrawl.
+	"""Return (title, text) via F indexingl.
 
 	Priority:
 	1) Local open-source server (FIRECRAWL_BASE_URL, defaults to http://127.0.0.1:3002)
