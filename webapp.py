@@ -98,8 +98,8 @@ def _default_embed_model() -> str:
 
 
 def get_pg_conn():
-	# Prefer full DSN if provided (e.g., Neon / Netlify)
-	dsn = os.getenv("DATABASE_URL") or os.getenv("NETLIFY_DATABASE_URL")
+    # Prefer full DSN if provided (e.g., Supabase / Neon / Netlify)
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or os.getenv("NETLIFY_DATABASE_URL")
 	if dsn:
 		# Ensure SSL for managed Postgres (e.g., Supabase) unless explicitly disabled
 		if "sslmode" not in dsn:
@@ -1266,6 +1266,40 @@ async def api_status():
     except Exception:
         pid = None
     return {"db": health, "pids": pids or {"pid": pid}, "embedding_col": active_col}
+
+
+@app.get("/api/connections")
+async def api_connections():
+    """Report connectivity to key services used by the hub."""
+    out = {"connections": []}
+    # Postgres
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        out["connections"].append({"name": "postgres", "status": "ok"})
+    except Exception as e:
+        out["connections"].append({"name": "postgres", "status": "error", "error": str(e)})
+    # OpenAI
+    try:
+        key = os.getenv("OPENAI_API_KEY")
+        if key:
+            _ = OpenAI(api_key=key)
+            out["connections"].append({"name": "openai", "status": "ok"})
+        else:
+            out["connections"].append({"name": "openai", "status": "missing_key"})
+    except Exception as e:
+        out["connections"].append({"name": "openai", "status": "error", "error": str(e)})
+    # Google Drive (presence only)
+    try:
+        if os.getenv("GDRIVE_FOLDER_ID") or os.getenv("FOLDER_ID"):
+            out["connections"].append({"name": "gdrive", "status": "configured"})
+        else:
+            out["connections"].append({"name": "gdrive", "status": "not_configured"})
+    except Exception:
+        out["connections"].append({"name": "gdrive", "status": "unknown"})
+    return out
 
 
 @app.get("/health")

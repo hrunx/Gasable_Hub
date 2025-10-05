@@ -22,6 +22,16 @@ echo "Waiting for Next.js to be ready..."
 sleep 5
 
 # Start FastAPI
+echo "Applying database migrations (if any)..."
+python - <<'PY'
+from gasable_hub.db.postgres import run_migrations
+try:
+    applied = run_migrations()
+    print(f"Migrations applied: {applied}")
+except Exception as e:
+    print(f"Migration error: {e}")
+PY
+
 echo "Starting FastAPI backend on ${BACKEND_PORT}..."
 cd /app
 exec python -m uvicorn webapp:app --host 0.0.0.0 --port ${BACKEND_PORT} --workers 2
