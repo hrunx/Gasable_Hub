@@ -8,13 +8,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Set production environment
 export ENVIRONMENT=production
-export PORT=${PORT:-8000}
+export PORT=${PORT:-8080}
 export BACKEND_PORT=${BACKEND_PORT:-8001}
 
 # Start Next.js server in background
 echo "Starting Next.js frontend..."
-cd .next/standalone
-node server.js > /app/logs/nextjs.log 2>&1 &
+node /app/server.js > /app/logs/nextjs.log 2>&1 &
 NEXT_PID=$!
 echo "✓ Next.js started (PID: $NEXT_PID)"
 

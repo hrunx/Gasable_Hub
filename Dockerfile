@@ -1,7 +1,7 @@
 # Multi-stage build for production deployment
 
-# Stage 1: Build Next.js app
-FROM node:18-alpine AS frontend-builder
+# Stage 1: Build Next.js app (Debian-based to match runtime)
+FROM node:18-bullseye-slim AS frontend-builder
 WORKDIR /app
 
 # Copy package files
@@ -45,12 +45,12 @@ COPY --from=frontend-builder /app/public ./public
 # Create necessary directories
 RUN mkdir -p logs storage
 
-# Expose port
-EXPOSE 8000
+# Expose port (Cloud Run defaults to 8080)
+EXPOSE 8080
 
 # Set environment variable
 ENV ENVIRONMENT=production
-ENV PORT=8000
+ENV PORT=8080
 
 # Copy start script
 COPY start-production.sh ./
