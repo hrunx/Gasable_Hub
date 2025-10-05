@@ -5,14 +5,16 @@ FROM node:18-alpine AS frontend-builder
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json package-lock.json ./
 
-# Copy Next.js config files (only if they exist)
-COPY next.config.ts* ./
-COPY tsconfig.json* ./
-COPY postcss.config.mjs* ./
-COPY components.json* ./
-COPY eslint.config.mjs* ./
+# Copy Next.js config files
+COPY next.config.ts ./
+COPY tsconfig.json ./
+COPY postcss.config.mjs ./
+
+# Copy optional config files (use shell to ignore if missing)
+COPY components.jso[n] ./ 2>/dev/null || true
+COPY eslint.config.mj[s] ./ 2>/dev/null || true
 
 # Install dependencies
 RUN npm ci
