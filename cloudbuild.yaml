@@ -25,16 +25,12 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
-      - '--port'
-      - '8080'
       - '--memory'
       - '2Gi'
       - '--cpu'
       - '2'
       - '--timeout'
       - '300'
-      - '--set-env-vars'
-      - 'ENVIRONMENT=production'
       - '--quiet'
 
 images:
