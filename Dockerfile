@@ -7,21 +7,11 @@ WORKDIR /app
 # Copy package files
 COPY package.json package-lock.json ./
 
-# Copy Next.js config files
-COPY next.config.ts ./
-COPY tsconfig.json ./
-COPY postcss.config.mjs ./
-
-# Copy optional config files (use shell to ignore if missing)
-COPY components.jso[n] ./ 2>/dev/null || true
-COPY eslint.config.mj[s] ./ 2>/dev/null || true
-
 # Install dependencies
 RUN npm ci
 
-# Copy source code
-COPY src ./src
-COPY public ./public
+# Copy project source and configs required for Next.js build
+COPY . .
 
 # Build Next.js app
 RUN npm run build
