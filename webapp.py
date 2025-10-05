@@ -97,9 +97,10 @@ def _default_embed_model() -> str:
 	return "text-embedding-3-small" if dim == 1536 else "text-embedding-3-large"
 
 
+
 def get_pg_conn():
-    # Prefer full DSN if provided (e.g., Supabase / Neon / Netlify)
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or os.getenv("NETLIFY_DATABASE_URL")
+	# Prefer full DSN if provided (e.g., Supabase / Neon / Netlify)
+	dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or os.getenv("NETLIFY_DATABASE_URL")
 	if dsn:
 		# Ensure SSL for managed Postgres (e.g., Supabase) unless explicitly disabled
 		if "sslmode" not in dsn:
