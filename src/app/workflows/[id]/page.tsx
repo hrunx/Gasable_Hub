@@ -67,7 +67,7 @@ export default function WorkflowPage({
 
     try {
       // Execute the workflow by calling the orchestrate API with the start node
-      const response = await fetch("http://localhost:8000/api/orchestrate", {
+      const response = await fetch("/api/orchestrate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

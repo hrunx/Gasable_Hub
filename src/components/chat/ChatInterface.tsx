@@ -64,7 +64,7 @@ export function ChatInterface({
 
       if (selectedAgent === null) {
         // Multi-Agent Mode: Use orchestrator to route to appropriate agent
-        response = await fetch("http://localhost:8000/api/orchestrate", {
+        response = await fetch("/api/orchestrate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -76,7 +76,7 @@ export function ChatInterface({
         data = await response.json();
       } else {
         // Direct Agent Mode: Chat directly with selected agent
-        response = await fetch("http://localhost:8000/api/orchestrate", {
+        response = await fetch("/api/orchestrate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
