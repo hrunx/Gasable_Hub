@@ -1,4 +1,7 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use relative URL in production, localhost in development
+const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
+  ? '' // Empty string uses same origin in production
+  : "http://localhost:8000";
 
 interface Agent {
   id: string;

@@ -24,13 +24,11 @@ interface Agent {
 interface ChatInterfaceProps {
   agents?: Agent[];
   selectedAgent?: string | null;
-  onAgentSelect?: (agentId: string | null) => void; // eslint-disable-line @typescript-eslint/no-unused-vars
 }
 
 export function ChatInterface({ 
   agents = [], 
   selectedAgent: selectedAgentProp = null,
-  onAgentSelect 
 }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");

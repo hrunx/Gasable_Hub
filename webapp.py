@@ -1021,16 +1021,28 @@ def generate_answer(query: str, context_chunks: list[tuple[str, str, float]]) ->
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-	"""Redirect to React dashboard (Next.js dev server on port 3000)."""
-	from fastapi.responses import RedirectResponse
-	return RedirectResponse(url="http://localhost:3000")
+	"""Serve dashboard - redirect to Next.js in dev, proxy in production."""
+	# In development, redirect to Next.js dev server
+	if os.getenv("ENVIRONMENT") != "production":
+		from fastapi.responses import RedirectResponse
+		return RedirectResponse(url="http://localhost:3000")
+	
+	# In production on Cloud Run, proxy to Next.js standalone server
+	import httpx
+	async with httpx.AsyncClient() as client:
+		try:
+			next_url = f"http://localhost:3000{request.url.path}"
+			response = await client.get(next_url, headers=dict(request.headers))
+			return HTMLResponse(content=response.text, status_code=response.status_code)
+		except Exception as e:
+			return HTMLResponse(f"Dashboard unavailable: {str(e)}", status_code=503)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    """Redirect to React dashboard (Next.js dev server on port 3000)."""
+    """Redirect to main dashboard."""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="http://localhost:3000")
+    return RedirectResponse(url="/")
 
 
 @app.post("/api/query")

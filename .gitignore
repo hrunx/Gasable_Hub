@@ -1,49 +1,40 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
 .venv/
-venv/
-ENV/
-env/
-
-# Next.js
-.next/
-out/
-node_modules/
-*.log
-dev.out
-logs/
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
+__pycache__/
+*.pyc
 .DS_Store
-Thumbs.db
+.idea/
+.vscode/
 
-# Build
+# Node
+node_modules/
 dist/
 build/
-*.egg-info/
 
-# Storage
+# Secrets
+.env
+.env.*
+*.json
+
+# Local data
 storage/
-*.db
-*.sqlite
-
-# Logs
-uvicorn.out
-uvicorn_*.out
+logs/
+exports/
+node_modules/
 *.log
+logs/
+.DS_Store
+# ignore large artifacts
+/gasable_index.json
+# Netlify
+.netlify/
+# Python venv
+.venv/
+__pycache__/
+*.pyc
+logs/
+.DS_Store
+storage/
+.env
+.env.*
+client_secret*.json
+google_oauth*.json

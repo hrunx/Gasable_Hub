@@ -146,7 +146,6 @@ export default function Home() {
                 <ChatInterface 
                   agents={agents}
                   selectedAgent={selectedChatAgent}
-                  onAgentSelect={setSelectedChatAgent}
                 />
               </div>
               <div className="space-y-4">
