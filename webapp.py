@@ -1021,39 +1021,16 @@ def generate_answer(query: str, context_chunks: list[tuple[str, str, float]]) ->
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-	"""Redirect to React dashboard in development, serve static in production."""
-	if os.getenv("ENVIRONMENT", "development") == "development":
-		from fastapi.responses import RedirectResponse
-		return RedirectResponse(url="http://localhost:3000")
-	# In production, serve the Next.js static build
-	try:
-		import pathlib
-		static_path = pathlib.Path("static/dashboard/index.html")
-		if static_path.exists():
-			return HTMLResponse(static_path.read_text())
-	except Exception:
-		pass
-	return templates.TemplateResponse("index.html", {"request": request})
+	"""Redirect to React dashboard (Next.js dev server on port 3000)."""
+	from fastapi.responses import RedirectResponse
+	return RedirectResponse(url="http://localhost:3000")
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    """Redirect to new React dashboard or serve static build in production."""
-    # In development, redirect to Next.js dev server
-    if os.getenv("ENVIRONMENT", "development") == "development":
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="http://localhost:3000")
-    # In production, serve the Next.js static build
-    # (You'll export Next.js static files to ./static/dashboard/)
-    try:
-        import pathlib
-        static_path = pathlib.Path("static/dashboard/index.html")
-        if static_path.exists():
-            return HTMLResponse(static_path.read_text())
-    except Exception:
-        pass
-    # Fallback to old dashboard if React build not available
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    """Redirect to React dashboard (Next.js dev server on port 3000)."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="http://localhost:3000")
 
 
 @app.post("/api/query")
