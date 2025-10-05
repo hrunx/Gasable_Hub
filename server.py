@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from gasable_hub.server import mcp
 from gasable_hub.tools import auto_register_tools, register_db_tools
 from gasable_hub.config import get_settings

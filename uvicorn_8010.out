@@ -1,0 +1,489 @@
+INFO:     Will watch for changes in these directories: ['/Users/hrn/Desktop/gasable_mcp']
+INFO:     Uvicorn running on http://127.0.0.1:8010 (Press CTRL+C to quit)
+INFO:     Started reloader process [96452] using StatReload
+/Users/hrn/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+INFO:     Started server process [96466]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:61972 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61990 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61972 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:62015 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62016 - "GET /api/agents HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62020 - "POST /api/orchestrate HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:62050 - "GET /dashboard HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62050 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62051 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62052 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62053 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62054 - "GET /api/db/tables HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62055 - "GET /api/processed_files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62050 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62110 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62111 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62112 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62110 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62139 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62140 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62141 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62139 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62200 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62201 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62202 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62200 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62228 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62229 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62230 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62228 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62256 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62257 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62258 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62256 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62281 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62282 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62283 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62281 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62282 - "GET /dashboard HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62282 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62297 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62298 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62299 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62301 - "GET /api/db/tables HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62302 - "GET /api/processed_files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62282 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62299 - "GET /ui HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62299 - "GET /src/main.tsx HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:62445 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62446 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62447 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62448 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62449 - "GET /api/db/tables HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62450 - "GET /api/processed_files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62445 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62499 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62500 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62501 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62499 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62528 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62529 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62530 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62528 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62557 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62558 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62559 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62557 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62592 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62593 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62594 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62592 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62631 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62632 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62633 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62631 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62664 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62665 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62666 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62664 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62698 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62699 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62700 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62698 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62730 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62731 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62732 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62730 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62759 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62763 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62764 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62768 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62769 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62770 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62768 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62774 - "GET /api/db/tables HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62796 - "GET /api/processed_files?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62801 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62802 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62803 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62801 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62826 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62827 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62828 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62826 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62854 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62855 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62856 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62854 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62896 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62897 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62898 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62896 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62944 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62945 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62946 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62944 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62978 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62979 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62980 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62978 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63009 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63010 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63011 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63009 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63037 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63038 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63039 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63037 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63065 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63066 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63067 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63065 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63094 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63095 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63096 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63094 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63158 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63159 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63160 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63158 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63186 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63187 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63188 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63186 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63188 - "GET /dashboard HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63186 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63188 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63186 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63208 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63209 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63210 - "GET /api/db/tables HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63211 - "GET /api/processed_files HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63260 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63261 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63262 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63260 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63288 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63289 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63290 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63288 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63314 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63315 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63316 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63314 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63342 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63343 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63344 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63342 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63376 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63377 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63378 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63376 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63405 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63406 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63407 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63405 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63432 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63433 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63434 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63432 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63462 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63463 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63464 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63462 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63489 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63490 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63491 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63489 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63514 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63515 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63516 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63514 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63549 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63550 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63551 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63549 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63574 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63575 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63576 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63574 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63601 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63602 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63603 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63601 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63629 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63630 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63631 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63629 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63662 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63663 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63664 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63662 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63689 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63690 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63691 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63719 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63720 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63721 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63719 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63746 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63747 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63748 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63746 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63773 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63774 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63775 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63773 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63802 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63803 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63804 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63802 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63832 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63833 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63834 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63832 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63857 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63858 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63859 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63857 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63886 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63887 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63888 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63886 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63913 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63914 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63915 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63913 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63940 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63941 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63942 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63940 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63968 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63969 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63970 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63968 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64011 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64012 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64013 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64011 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64040 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64041 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64042 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64040 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64068 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64069 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64070 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64068 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64094 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64095 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64096 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64094 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64120 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64121 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64122 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64120 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64145 - "POST /api/assistants/provision HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64146 - "GET /api/agents HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64152 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64153 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64154 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64152 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64181 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64183 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64184 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64181 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64208 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64209 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64210 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64208 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64236 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64237 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64238 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64236 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64263 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64264 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64265 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64263 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64291 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64292 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64293 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64291 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64321 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64322 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64323 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64321 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64348 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64349 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64350 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64348 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64373 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64374 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64375 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64373 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64402 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64403 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64404 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64402 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64428 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64429 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64430 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64428 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64453 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64454 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64455 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64453 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64481 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64482 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64483 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64481 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64508 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64509 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64510 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64508 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64534 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64535 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64536 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64534 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64562 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64563 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64564 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64562 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64588 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64589 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64590 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64588 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64602 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64617 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64618 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64619 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64617 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64645 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64646 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64647 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64645 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64669 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64670 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64671 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64669 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64696 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64697 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64698 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64696 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64726 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64727 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64728 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64726 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64753 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64754 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64755 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64753 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64778 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64779 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64780 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64778 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64807 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64808 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64809 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64807 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64852 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64853 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64854 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64852 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64878 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64879 - "GET /health HTTP/1.1" 200 OK
+Traceback (most recent call last):
+  File "/Users/hrn/Library/Python/3.9/bin/uvicorn", line 7, in <module>
+    sys.exit(main())
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/click/core.py", line 1161, in __call__
+    return self.main(*args, **kwargs)
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/click/core.py", line 1082, in main
+    rv = self.invoke(ctx)
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/click/core.py", line 1443, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/click/core.py", line 788, in invoke
+    return __callback(*args, **kwargs)
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/uvicorn/main.py", line 423, in main
+    run(
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/uvicorn/main.py", line 588, in run
+    ChangeReload(config, target=server.run, sockets=[sock]).run()
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/uvicorn/supervisors/basereload.py", line 53, in run
+    for changes in self:
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/uvicorn/supervisors/basereload.py", line 72, in __next__
+    return self.should_restart()
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/uvicorn/supervisors/statreload.py", line 32, in should_restart
+    for file in self.iter_py_files():
+  File "/Users/hrn/Library/Python/3.9/lib/python/site-packages/uvicorn/supervisors/statreload.py", line 52, in iter_py_files
+    for path in list(reload_dir.rglob("*.py")):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/pathlib.py", line 1180, in rglob
+    for p in selector.select_from(self):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/pathlib.py", line 601, in _select_from
+    for p in successor_select(starting_point, is_dir, exists, scandir):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/pathlib.py", line 549, in _select_from
+    entries = list(scandir_it)
+InterruptedError: [Errno 4] Interrupted system call: '/Users/hrn/Desktop/gasable_mcp/.netlify/functions-serve/health 3/node_modules/protobufjs 2/src/rpc'
+INFO:     127.0.0.1:64880 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64878 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64910 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64911 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64912 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64910 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64935 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64936 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64937 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64935 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64964 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64965 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64966 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64964 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64995 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64996 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64997 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64995 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65024 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65025 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65026 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65024 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65053 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65054 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65055 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65053 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65086 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65087 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65088 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65086 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65113 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65114 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65115 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65113 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65141 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65142 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65143 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65141 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65170 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65171 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65172 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65170 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65197 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65198 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65199 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65197 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65224 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65225 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65226 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65224 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65254 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65255 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65256 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65254 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65281 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65282 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65283 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65281 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65307 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65308 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65309 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65307 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65336 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65337 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65338 - "GET /api/db_stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65336 - "GET /api/mcp_tools HTTP/1.1" 500 Internal Server Error

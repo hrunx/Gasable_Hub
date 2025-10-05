@@ -909,6 +909,54 @@ Index: HNSW (cosine similarity)
       </div>
     </div>
 
+    <!-- Agents Hub -->
+    <div class="card full-width">
+      <div class="card-header">
+        <div class="card-title">
+          <span class="card-icon">🧩</span>
+          Agents Hub
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px;">
+        <div>
+          <table class="db-table" id="agentsTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Namespace</th>
+                <th>Tools</th>
+                <th>Assistant</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td colspan="5" style="text-align: center; padding: 20px; color: #94a3b8;">
+                  <div class="spinner"></div>
+                  <p style="margin-top: 12px;">Loading agents...</p>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div style="margin-bottom: 12px; font-weight: 600;">Create / Update Agent</div>
+          <div style="display: grid; gap: 8px;">
+            <input id="a_id" placeholder="id (e.g., support)" style="padding: 8px; background:#0a0e1a; border:1px solid #334155; color:#e2e8f0; border-radius:6px;" />
+            <input id="a_name" placeholder="display name" style="padding: 8px; background:#0a0e1a; border:1px solid #334155; color:#e2e8f0; border-radius:6px;" />
+            <input id="a_namespace" value="global" placeholder="namespace" style="padding: 8px; background:#0a0e1a; border:1px solid #334155; color:#e2e8f0; border-radius:6px;" />
+            <textarea id="a_prompt" rows="5" placeholder="system prompt" style="padding: 8px; background:#0a0e1a; border:1px solid #334155; color:#e2e8f0; border-radius:6px;"></textarea>
+            <input id="a_tools" placeholder="tools CSV (rag.search,orders.place)" style="padding: 8px; background:#0a0e1a; border:1px solid #334155; color:#e2e8f0; border-radius:6px;" />
+            <div style="display:flex; gap:8px;">
+              <button class="copy-btn" onclick="saveAgent()">Save Agent</button>
+              <button class="copy-btn" onclick="testOrchestrate()">Test Orchestrate</button>
+            </div>
+            <small id="agentSaveMsg" style="color:#94a3b8; display:none;">Saved</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script>
@@ -1264,6 +1312,56 @@ Index: HNSW (cosine similarity)
       if (refreshInterval) clearInterval(refreshInterval);
       Object.values(healthCheckTimers).forEach(timer => clearTimeout(timer));
     });
+
+    async function loadAgents() {
+      try {
+        const res = await fetch('/api/agents');
+        const data = await res.json();
+        const tbody = document.querySelector('#agentsTable tbody');
+        tbody.innerHTML = (data.agents || []).map(a => `
+          <tr>
+            <td><code>${a.id}</code></td>
+            <td>${a.display_name || ''}</td>
+            <td>${a.namespace || ''}</td>
+            <td><code>${(a.tool_allowlist || []).join(', ')}</code></td>
+            <td><code>${a.assistant_id || ''}</code></td>
+          </tr>
+        `).join('');
+      } catch (e) { console.error('loadAgents failed', e); }
+    }
+
+    async function saveAgent() {
+      const id = document.getElementById('a_id').value.trim();
+      const display_name = document.getElementById('a_name').value.trim();
+      const namespace = document.getElementById('a_namespace').value.trim() || 'global';
+      const system_prompt = document.getElementById('a_prompt').value.trim();
+      const tool_allowlist = (document.getElementById('a_tools').value || '').split(',').map(s=>s.trim()).filter(Boolean);
+      if (!id || !display_name || !system_prompt) return;
+      const body = { id, display_name, namespace, system_prompt, tool_allowlist };
+      try {
+        const res = await fetch('/api/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        await res.json();
+        document.getElementById('agentSaveMsg').style.display = 'inline';
+        setTimeout(()=>{ document.getElementById('agentSaveMsg').style.display = 'none'; }, 1500);
+        loadAgents();
+      } catch (e) { console.error('saveAgent failed', e); }
+    }
+
+    async function testOrchestrate() {
+      const msg = prompt('Message to orchestrate (e.g., please order 2x XYZ)');
+      if (!msg) return;
+      const body = { user_id: 'demo_user', message: msg, namespace: 'global' };
+      try {
+        const res = await fetch('/api/orchestrate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await res.json();
+        alert(`Agent: ${data.agent}\nStatus: ${data.status}\nMessage: ${data.message?.substring(0,500) || ''}`);
+      } catch (e) { console.error('testOrchestrate failed', e); }
+    }
+
+    // Hook agent loader
+    initDashboard = (function(orig){
+      return async function() { await orig(); await loadAgents(); };
+    })(initDashboard);
   </script>
 </body>
 </html>

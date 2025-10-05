@@ -1,0 +1,211 @@
+
+> gasable-ui@0.1.0 dev
+> next dev
+
+ ⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+ We detected multiple lockfiles and selected the directory of /Users/hrn/Desktop/gasable_mcp/package-lock.json as the root directory.
+ To silence this warning, set `outputFileTracingRoot` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/output#caveats for more information.
+ Detected additional lockfiles: 
+   * /Users/hrn/Desktop/gasable_mcp/gasable-ui/package-lock.json
+
+   ▲ Next.js 15.5.4
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.3.136:3000
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 1423ms
+ ○ Compiling / ...
+ ✓ Compiled / in 812ms (947 modules)
+ GET / 200 in 1071ms
+ ✓ Compiled in 297ms (404 modules)
+ GET / 200 in 63ms
+ ✓ Compiled in 194ms (947 modules)
+ GET / 200 in 54ms
+ ✓ Compiled in 112ms (947 modules)
+ GET / 200 in 36ms
+ ✓ Compiled in 170ms (947 modules)
+ GET / 200 in 77ms
+ ✓ Compiled in 143ms (947 modules)
+ GET / 200 in 55ms
+ ✓ Compiled in 131ms (947 modules)
+ GET / 200 in 48ms
+ ✓ Compiled in 234ms (947 modules)
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json',
+  page: '/'
+}
+ ✓ Compiled /_error in 310ms (1272 modules)
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+ GET / 500 in 1407ms
+ GET / 500 in 237ms
+ ✓ Compiled in 236ms (1286 modules)
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+ GET / 500 in 984ms
+ GET / 500 in 268ms
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+ GET / 500 in 476ms
+ GET / 500 in 20ms
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+ GET / 500 in 52ms
+ GET / 500 in 19ms
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/app-paths-manifest.json',
+  page: '/'
+}
+ ⨯ [Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/server/pages-manifest.json'
+}
+[Error: ENOENT: no such file or directory, open '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/hrn/Desktop/gasable_mcp/gasable-ui/.next/routes-manifest.json'
+}
+ GET / 500 in 53ms
+ GET / 500 in 20ms
+ ✓ Compiled in 320ms (1286 modules)
+ ✓ Compiled in 72ms (555 modules)
+ ✓ Compiled in 81ms (555 modules)
+ ✓ Compiled in 54ms (555 modules)
+ ✓ Compiled in 52ms (555 modules)

@@ -1,0 +1,56 @@
+feat: Complete multi-agent dashboard with RAG chat and n8n-style agent creation
+
+MAJOR FEATURES:
+✅ RAG Chat Interface
+   - Multi-agent orchestration with automatic routing
+   - Real-time chat with message history
+   - Agent indicators ("Calling research agent...")
+   - Error handling and loading states
+
+✅ Agent Creation Modal (n8n-style)
+   - Full form with all configuration fields
+   - Tool selection with checkbox list and badges
+   - Model selection (GPT-4o, GPT-4o-mini, GPT-5-mini)
+   - Edit existing agents by clicking cards
+
+✅ Two New AI Agents
+   - Research Agent: Web search & document analysis (ingest_web, ingest_urls)
+   - Marketing Agent: Email campaigns & content (gmail.send, gmail.draft)
+
+✅ Production Deployment
+   - Dashboard route redirects to React UI in dev
+   - Serves static React build in production
+   - Single port (8000) for everything in Cloud Run
+   - Complete deployment guide
+
+COMPONENTS ADDED:
+- ChatInterface.tsx: Full RAG chat UI
+- AgentModal.tsx: n8n-style agent creation form
+- Updated page.tsx: Integrated chat as default tab
+- Migration 0012: Research & Marketing agents
+
+DATABASE:
+- Added research agent (tools: rag.search, ingest_web, ingest_urls)
+- Added marketing agent (tools: rag.search, gmail.send, gmail.draft)
+- Both added to Supabase production database
+
+DOCUMENTATION:
+- QUICK_START.md: User guide for all features
+- DEPLOYMENT_GUIDE.md: Production deployment instructions
+- FEATURES_SUMMARY.md: Complete feature breakdown
+- FINAL_SUMMARY.md: Implementation summary
+
+FIXES:
+- Dashboard route now redirects to React UI (localhost:3000)
+- Type safety improvements (removed `any` types)
+- Build errors resolved (100% clean build)
+- All 4 agents now accessible via API
+
+BREAKING CHANGES:
+- /dashboard now redirects to http://localhost:3000 in development
+- In production, /dashboard serves static React build
+
+NOTES:
+- Frontend: http://localhost:3000 (development)
+- Backend: http://localhost:8000 (always)
+- Production: Single URL on port 8000 (React + API)

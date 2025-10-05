@@ -38,7 +38,7 @@ def _upsert_embeddings_docs(docs: list[dict]) -> int:
 	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 	model = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 	inserts = 0
-    col = _safe_embed_col()
+	col = _safe_embed_col()
 	with pg_connect() as conn:
 		with conn.cursor() as cur:
 			for d in docs:
@@ -49,24 +49,24 @@ def _upsert_embeddings_docs(docs: list[dict]) -> int:
 				emb = client.embeddings.create(model=model, input=text)
 				vec = emb.data[0].embedding
 				vec_str = "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
-                if col == "embedding_1536":
-                    cur.execute(
-                        """
-                        INSERT INTO public.gasable_index (node_id, text, embedding_1536, li_metadata)
-                        VALUES (%s, %s, %s::vector, '{}'::jsonb)
-                        ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding_1536=EXCLUDED.embedding_1536
-                        """,
-                        (did, text, vec_str),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
-                        VALUES (%s, %s, %s::vector, '{}'::jsonb)
-                        ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding=EXCLUDED.embedding
-                        """,
-                        (did, text, vec_str),
-                    )
+				if col == "embedding_1536":
+					cur.execute(
+						"""
+						INSERT INTO public.gasable_index (node_id, text, embedding_1536, li_metadata)
+						VALUES (%s, %s, %s::vector, '{}'::jsonb)
+						ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding_1536=EXCLUDED.embedding_1536
+						""",
+						(did, text, vec_str),
+					)
+				else:
+					cur.execute(
+						"""
+						INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
+						VALUES (%s, %s, %s::vector, '{}'::jsonb)
+						ON CONFLICT (node_id) DO UPDATE SET text=EXCLUDED.text, embedding=EXCLUDED.embedding
+						""",
+						(did, text, vec_str),
+					)
 				inserts += 1
 			conn.commit()
 	return inserts

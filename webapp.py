@@ -35,6 +35,9 @@ from gasable_hub.ingestion.indexer import index_documents
 from sse_starlette.sse import EventSourceResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from gasable_hub.agents.boot import ensure_assistants
+from pydantic import BaseModel
+from openai import OpenAI
 
 
 app = FastAPI()
@@ -43,6 +46,16 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Load local environment variables for development parity
 load_dotenv(override=True)
+
+# Provision assistants on boot if requested (no-op if already created)
+try:
+    if os.getenv("AUTO_ENSURE_ASSISTANTS", "1") in ("1", "true", "True"):
+        try:
+            _n = ensure_assistants()
+        except Exception:
+            _n = 0
+except Exception:
+    pass
 
 # CORS for external chatbot/frontends
 _cors_env = os.getenv("CORS_ORIGINS", "*").strip()
@@ -1008,11 +1021,38 @@ def generate_answer(query: str, context_chunks: list[tuple[str, str, float]]) ->
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+	"""Redirect to React dashboard in development, serve static in production."""
+	if os.getenv("ENVIRONMENT", "development") == "development":
+		from fastapi.responses import RedirectResponse
+		return RedirectResponse(url="http://localhost:3000")
+	# In production, serve the Next.js static build
+	try:
+		import pathlib
+		static_path = pathlib.Path("static/dashboard/index.html")
+		if static_path.exists():
+			return HTMLResponse(static_path.read_text())
+	except Exception:
+		pass
 	return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    """Redirect to new React dashboard or serve static build in production."""
+    # In development, redirect to Next.js dev server
+    if os.getenv("ENVIRONMENT", "development") == "development":
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="http://localhost:3000")
+    # In production, serve the Next.js static build
+    # (You'll export Next.js static files to ./static/dashboard/)
+    try:
+        import pathlib
+        static_path = pathlib.Path("static/dashboard/index.html")
+        if static_path.exists():
+            return HTMLResponse(static_path.read_text())
+    except Exception:
+        pass
+    # Fallback to old dashboard if React build not available
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
@@ -1538,5 +1578,159 @@ async def api_ingest_firecrawl(payload: dict):
         return {"status": "ok", "url_count": len(pages), "ingested": len(docs), "written": written}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+class OrchestrateIn(BaseModel):
+	user_id: str
+	message: str
+	namespace: str = "global"
+	agent_preference: str | None = None
+
+
+def _route_intent(text: str) -> str:
+	keys = ["order", "buy", "purchase", "procure", "invoice", "checkout"]
+	return "procurement" if any(k in text.lower() for k in keys) else "support"
+
+
+@app.post("/api/orchestrate")
+async def api_orchestrate(inp: OrchestrateIn):
+	agent = inp.agent_preference or _route_intent(inp.message)
+	assistant_id = None
+	with get_pg_conn() as conn:
+		with conn.cursor() as cur:
+			cur.execute("select assistant_id from public.gasable_agents where id=%s", (agent,))
+			row = cur.fetchone()
+			assistant_id = row[0] if row else None
+	if not assistant_id:
+		return JSONResponse({"error": "assistant not provisioned", "agent": agent}, status_code=400)
+
+	client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+	thread = client.beta.threads.create()
+	client.beta.threads.messages.create(thread_id=thread.id, role="user", content=inp.message)
+	run = client.beta.threads.runs.create(
+		thread_id=thread.id,
+		assistant_id=assistant_id,
+		tool_choice="auto",
+		metadata={"namespace": inp.namespace, "user_id": inp.user_id},
+	)
+	while True:
+		r = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+		if r.status in ("completed", "failed", "requires_action", "expired", "cancelled"):
+			break
+
+	msgs = client.beta.threads.messages.list(thread_id=thread.id)
+	final = next((m for m in msgs.data if m.role == "assistant"), None)
+	text = final.content[0].text.value if (final and final.content) else ""
+
+	with get_pg_conn() as conn:
+		with conn.cursor() as cur:
+			cur.execute(
+				"""
+				insert into public.agent_runs (user_id, selected_agent, namespace, user_message, run_status, openai_thread_id, openai_run_id, result_summary)
+				values (%s,%s,%s,%s,%s,%s,%s,%s)
+				""",
+				(inp.user_id, agent, inp.namespace, inp.message, r.status, thread.id, run.id, text[:2000]),
+			)
+			conn.commit()
+	return {"agent": agent, "message": text, "status": r.status}
+
+
+class AgentUpsert(BaseModel):
+	id: str
+	display_name: str
+	system_prompt: str
+	tool_allowlist: list[str]
+	namespace: str = "global"
+	answer_model: str = "gpt-5-mini"
+	rerank_model: str = "gpt-5-mini"
+	top_k: int = 12
+
+
+@app.get("/api/agents")
+async def api_agents_list():
+	with get_pg_conn() as conn:
+		with conn.cursor() as cur:
+			cur.execute("select id, display_name, namespace, tool_allowlist, assistant_id from public.gasable_agents order by id")
+			rows = cur.fetchall()
+	return {"agents": [{"id": r[0], "display_name": r[1], "namespace": r[2], "tool_allowlist": r[3], "assistant_id": r[4]} for r in rows]}
+
+
+@app.post("/api/agents")
+async def api_agents_upsert(a: AgentUpsert):
+	with get_pg_conn() as conn:
+		with conn.cursor() as cur:
+			cur.execute(
+				"""
+				insert into public.gasable_agents (id, display_name, system_prompt, tool_allowlist, namespace, answer_model, rerank_model, top_k)
+				values (%s,%s,%s,%s,%s,%s,%s,%s)
+				on conflict (id) do update set display_name=excluded.display_name, system_prompt=excluded.system_prompt, tool_allowlist=excluded.tool_allowlist, namespace=excluded.namespace, answer_model=excluded.answer_model, rerank_model=excluded.rerank_model, top_k=excluded.top_k, updated_at=now()
+				""",
+				(a.id, a.display_name, a.system_prompt, a.tool_allowlist, a.namespace, a.answer_model, a.rerank_model, a.top_k),
+			)
+			conn.commit()
+	return {"status": "ok"}
+
+
+@app.post("/api/assistants/provision")
+async def api_assistants_provision():
+	"""Provision OpenAI assistants for agents missing assistant_id."""
+	try:
+		created = ensure_assistants()
+		return {"status": "ok", "created": int(created)}
+	except Exception as e:
+		return JSONResponse({"error": str(e)}, status_code=500)
+
+
+class WorkflowUpsert(BaseModel):
+	id: str
+	display_name: str
+	namespace: str = "global"
+	graph: dict
+
+
+@app.get("/api/workflows")
+async def api_workflows_list(namespace: str = "global"):
+	with get_pg_conn() as conn:
+		with conn.cursor() as cur:
+			cur.execute("select id, display_name, namespace, graph from public.gasable_workflows where namespace=%s order by id", (namespace,))
+			rows = cur.fetchall()
+	return {"workflows": [{"id": r[0], "display_name": r[1], "namespace": r[2], "graph": r[3]} for r in rows]}
+
+
+@app.get("/api/workflows/{wid}")
+async def api_workflows_get(wid: str):
+	with get_pg_conn() as conn:
+		with conn.cursor() as cur:
+			cur.execute("select id, display_name, namespace, graph from public.gasable_workflows where id=%s", (wid,))
+			row = cur.fetchone()
+	if not row:
+		return JSONResponse({"error": "not found"}, status_code=404)
+	return {"id": row[0], "display_name": row[1], "namespace": row[2], "graph": row[3]}
+
+
+@app.post("/api/workflows")
+async def api_workflows_upsert(w: WorkflowUpsert):
+	with get_pg_conn() as conn:
+		with conn.cursor() as cur:
+			cur.execute(
+				"""
+				insert into public.gasable_workflows (id, display_name, namespace, graph)
+				values (%s,%s,%s,%s)
+				on conflict (id) do update set display_name=excluded.display_name, namespace=excluded.namespace, graph=excluded.graph, updated_at=now()
+				""",
+				(w.id, w.display_name, w.namespace, json.dumps(w.graph)),
+			)
+			conn.commit()
+	return {"status": "ok"}
+
+
+@app.get("/ui")
+async def serve_ui():
+	try:
+		with open("index.html", "r", encoding="utf-8") as f:
+			html_text = f.read()
+		return HTMLResponse(html_text)
+	except Exception as e:
+		return JSONResponse({"error": str(e)}, status_code=500)
 
 

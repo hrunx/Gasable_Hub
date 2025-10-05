@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from mcp.server.fastmcp import FastMCP
 from .tools import auto_register_tools, register_db_tools
 from .config import get_settings
