@@ -6,10 +6,13 @@ WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-COPY tsconfig.json ./
-COPY next.config.ts ./
-COPY postcss.config.mjs ./
-COPY components.json ./
+
+# Copy Next.js config files (only if they exist)
+COPY next.config.ts* ./
+COPY tsconfig.json* ./
+COPY postcss.config.mjs* ./
+COPY components.json* ./
+COPY eslint.config.mjs* ./
 
 # Install dependencies
 RUN npm ci
