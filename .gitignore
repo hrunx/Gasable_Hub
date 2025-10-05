@@ -13,28 +13,15 @@ build/
 # Secrets
 .env
 .env.*
-*.json
+client_secret*.json
+google_oauth*.json
+**/gasable_index.json
 
 # Local data
 storage/
 logs/
 exports/
-node_modules/
 *.log
-logs/
-.DS_Store
-# ignore large artifacts
-/gasable_index.json
+
 # Netlify
 .netlify/
-# Python venv
-.venv/
-__pycache__/
-*.pyc
-logs/
-.DS_Store
-storage/
-.env
-.env.*
-client_secret*.json
-google_oauth*.json
