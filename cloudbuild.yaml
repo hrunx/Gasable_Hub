@@ -35,6 +35,7 @@ steps:
       - '300'
       - '--set-env-vars'
       - 'ENVIRONMENT=production'
+      - '--quiet'
 
 images:
   - 'gcr.io/$PROJECT_ID/gasable-hub:$COMMIT_SHA'
