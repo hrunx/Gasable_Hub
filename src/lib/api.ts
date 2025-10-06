@@ -12,6 +12,7 @@ interface Agent {
   answer_model?: string;
   rerank_model?: string;
   top_k?: number;
+  assistant_id?: string;
 }
 
 interface Workflow {
@@ -36,6 +37,14 @@ export const api = {
       body: JSON.stringify(agent),
     });
     if (!res.ok) throw new Error("Failed to save agent");
+    return res.json();
+  },
+
+  async syncAssistants() {
+    const res = await fetch(`${API_BASE}/api/assistants/sync`, {
+      method: "POST",
+    });
+    if (!res.ok) throw new Error("Failed to sync assistants");
     return res.json();
   },
 

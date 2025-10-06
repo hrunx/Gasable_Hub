@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import Link from "next/link";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { AgentModal } from "@/components/agents/AgentModal";
+import { ToolModal } from "@/components/agents/ToolModal";
 
 export default function Home() {
   const router = useRouter();
@@ -24,6 +25,8 @@ export default function Home() {
     tool_allowlist: string[];
   } | null>(null);
   const [selectedChatAgent, setSelectedChatAgent] = useState<string | null>(null);
+  const [toolModalOpen, setToolModalOpen] = useState(false);
+  const [selectedTool, setSelectedTool] = useState<{ name: string; description?: string; module?: string } | null>(null);
 
   const { data: agentsData } = useQuery({
     queryKey: ["agents"],
@@ -287,10 +290,15 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="tools" className="space-y-4">
-            <h2 className="text-xl font-semibold mb-4">MCP Tools</h2>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xl font-semibold">MCP Tools</h2>
+              <Button size="sm" onClick={() => { setSelectedTool(null); setToolModalOpen(true); }}>
+                <Plus className="mr-2 h-4 w-4" /> New Tool
+              </Button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {tools.map((tool: { name: string; description?: string; module?: string }) => (
-                <Card key={tool.name}>
+                <Card key={tool.name} className="cursor-pointer hover:shadow" onClick={() => { setSelectedTool(tool); setToolModalOpen(true); }}>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-base">
                       <Wrench className="h-4 w-4 text-green-600" />
@@ -358,6 +366,11 @@ export default function Home() {
           open={agentModalOpen}
           onOpenChange={setAgentModalOpen}
           agent={selectedAgentForModal}
+        />
+        <ToolModal
+          open={toolModalOpen}
+          onOpenChange={setToolModalOpen}
+          tool={selectedTool}
         />
       </div>
     </div>

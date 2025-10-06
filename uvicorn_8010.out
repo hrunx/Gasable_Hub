@@ -511,3 +511,113 @@ WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
 INFO:     Started server process [46666]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'server.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [46666]
+INFO:     Started server process [54428]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [54428]
+INFO:     Started server process [66727]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [66727]
+INFO:     Started server process [67435]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'gasable_hub/ingestion/gdrive.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [67435]
+INFO:     Started server process [68979]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [68979]
+INFO:     Started server process [71251]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'gasable_hub/agents/boot.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [71251]
+INFO:     Started server process [71393]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [71393]
+INFO:     Started server process [71775]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'gasable_hub/tools/__init__.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [71775]
+INFO:     Started server process [75546]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [75546]
+INFO:     Started server process [75751]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [75751]
+INFO:     Started server process [77129]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+Failed to ensure assistants on startup
+Traceback (most recent call last):
+  File "/Users/hrn/Desktop/gasable_mcp/webapp.py", line 85, in _run
+    created = await loop.run_in_executor(None, ensure_assistants)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.11/3.11.13/Frameworks/Python.framework/Versions/3.11/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/gasable_hub/agents/boot.py", line 30, in ensure_assistants
+    with _pg() as conn:
+         ^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/gasable_hub/agents/boot.py", line 11, in _pg
+    return pg_connect()
+           ^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/gasable_hub/db/postgres.py", line 36, in connect
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.DictCursor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+psycopg2.OperationalError: could not translate host name "db.lopbyztcrrngppnvajis.supabase.co" to address: nodename nor servname provided, or not known
+
+WARNING:  StatReload detected changes in 'gasable_hub/orch/search.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [77129]
+INFO:     Started server process [81249]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

@@ -36,6 +36,7 @@ Cloud Run Container
    gcloud services enable run.googleapis.com
    gcloud services enable cloudbuild.googleapis.com
    gcloud services enable containerregistry.googleapis.com
+   gcloud services enable artifactregistry.googleapis.com
    ```
 
 3. **Environment Variables** (Set in Cloud Run)
@@ -207,6 +208,12 @@ gcloud run services update gasable-hub \
 **Solution**: Check DATABASE_URL format
 ```
 postgresql://user:password@host:port/database?sslmode=require
+
+### Issue: `column cannot have more than 2000 dimensions for hnsw index`
+
+**Cause**: pgvector HNSW indexes support up to 2000 dimensions. If your `vector(n)` column has `n > 2000`, HNSW index creation fails.
+
+**Fix**: Our migrations now guard HNSW creation when dims > 2000 and will skip gracefully. Use IVFFlat or reduce embedding dimension.
 ```
 
 ---

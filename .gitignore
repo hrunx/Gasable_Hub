@@ -16,6 +16,8 @@ build/
 client_secret*.json
 google_oauth*.json
 **/gasable_index.json
+service_acc*.json
+service_acc(gasablehub).json
 
 # Local data
 storage/

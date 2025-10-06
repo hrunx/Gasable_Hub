@@ -12,8 +12,13 @@ alter table if exists public.gasable_index
 -- 2) Ensure 1536-dim embedding column and index
 alter table if exists public.gasable_index
 	add column if not exists embedding_1536 vector(1536);
-create index if not exists gasable_index_hnsw_1536
-	on public.gasable_index using hnsw (embedding_1536 vector_cosine_ops);
+-- Guard HNSW creation for 1536 dims (supported) but catch provider limits
+do $$
+begin
+    execute 'create index if not exists gasable_index_hnsw_1536 on public.gasable_index using hnsw (embedding_1536 vector_cosine_ops)';
+exception when others then
+    raise notice 'Skipping HNSW on embedding_1536: %', SQLERRM;
+end $$;
 
 -- 3) Ensure BM25 tsvector and gin index
 alter table if exists public.gasable_index

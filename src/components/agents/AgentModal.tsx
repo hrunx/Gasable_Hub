@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -35,14 +35,31 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
     namespace: agent?.namespace || "global",
     system_prompt: agent?.system_prompt || "",
     tool_allowlist: agent?.tool_allowlist || [],
-    answer_model: agent?.answer_model || "gpt-4o",
-    rerank_model: agent?.rerank_model || "gpt-4o-mini",
+    answer_model: agent?.answer_model || "gpt-5",
+    rerank_model: agent?.rerank_model || "gpt-5-mini",
     top_k: agent?.top_k || 12,
   });
 
   const [selectedTools, setSelectedTools] = useState<string[]>(
     agent?.tool_allowlist || []
   );
+
+  // Keep modal fields in sync when editing an existing agent
+  useEffect(() => {
+    if (open) {
+      setFormData({
+        id: agent?.id || "",
+        display_name: agent?.display_name || "",
+        namespace: agent?.namespace || "global",
+        system_prompt: agent?.system_prompt || "",
+        tool_allowlist: agent?.tool_allowlist || [],
+        answer_model: agent?.answer_model || "gpt-5",
+        rerank_model: agent?.rerank_model || "gpt-5-mini",
+        top_k: agent?.top_k || 12,
+      });
+      setSelectedTools(agent?.tool_allowlist || []);
+    }
+  }, [agent, open]);
 
   // Fetch available tools
   const { data: toolsData } = useQuery({
@@ -62,10 +79,36 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    saveAgent.mutate({
-      ...formData,
-      tool_allowlist: selectedTools,
-    });
+    // Auto-generate ID from name on create
+    const id = agent?.id
+      ? agent.id
+      : (formData.display_name || "")
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "");
+
+    saveAgent.mutate(
+      {
+        ...formData,
+        id,
+        answer_model: "gpt-5",
+        rerank_model: "gpt-5-mini",
+        top_k: 12,
+        tool_allowlist: selectedTools,
+      },
+      {
+        onSuccess: async () => {
+          // After saving agent config, sync OpenAI assistants to reflect changes
+          try {
+            await api.syncAssistants();
+            queryClient.invalidateQueries({ queryKey: ["agents"] });
+          } catch (_) {
+            // Best-effort: ignore sync failure in UI
+          }
+        },
+      }
+    );
   };
 
   const toggleTool = (toolName: string) => {
@@ -89,27 +132,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Agent ID */}
-          <div className="space-y-2">
-            <Label htmlFor="id">
-              Agent ID <span className="text-red-500">*</span>
-            </Label>
-            <Input
-              id="id"
-              value={formData.id}
-              onChange={(e) =>
-                setFormData({ ...formData, id: e.target.value.toLowerCase().replace(/\s+/g, "_") })
-              }
-              placeholder="e.g., research, marketing, support"
-              required
-              disabled={!!agent}
-            />
-            <p className="text-xs text-gray-500">
-              Unique identifier (lowercase, no spaces)
-            </p>
-          </div>
-
-          {/* Display Name */}
+          {/* Agent Name */}
           <div className="space-y-2">
             <Label htmlFor="display_name">
               Display Name <span className="text-red-500">*</span>
@@ -124,6 +147,8 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
               required
             />
           </div>
+
+          {/* (ID is auto-generated; hidden from non-technical users) */}
 
           {/* Namespace */}
           <div className="space-y-2">
@@ -211,64 +236,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
             </div>
           </div>
 
-          {/* Answer Model */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="answer_model">Answer Model</Label>
-              <Select
-                value={formData.answer_model}
-                onValueChange={(value) =>
-                  setFormData({ ...formData, answer_model: value })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-                  <SelectItem value="gpt-4o-mini">GPT-4o Mini</SelectItem>
-                  <SelectItem value="gpt-5-mini">GPT-5 Mini</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="rerank_model">Rerank Model</Label>
-              <Select
-                value={formData.rerank_model}
-                onValueChange={(value) =>
-                  setFormData({ ...formData, rerank_model: value })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-                  <SelectItem value="gpt-4o-mini">GPT-4o Mini</SelectItem>
-                  <SelectItem value="gpt-5-mini">GPT-5 Mini</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {/* Top K */}
-          <div className="space-y-2">
-            <Label htmlFor="top_k">Top K Results</Label>
-            <Input
-              id="top_k"
-              type="number"
-              value={formData.top_k}
-              onChange={(e) =>
-                setFormData({ ...formData, top_k: parseInt(e.target.value) })
-              }
-              min={1}
-              max={50}
-            />
-            <p className="text-xs text-gray-500">
-              Number of context chunks to retrieve for RAG
-            </p>
-          </div>
+          {/* Models and Top K are set to safe defaults and hidden */}
 
           <DialogFooter>
             <Button
@@ -281,6 +249,18 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
             </Button>
             <Button type="submit" disabled={saveAgent.isPending}>
               {saveAgent.isPending ? "Saving..." : agent ? "Update Agent" : "Create Agent"}
+            </Button>
+            <Button
+              type="button"
+              disabled={saveAgent.isPending}
+              onClick={(e) => {
+                // Submit then provision assistants
+                e.preventDefault();
+                const fakeEvt = { preventDefault() {} } as unknown as React.FormEvent;
+                handleSubmit(fakeEvt);
+              }}
+            >
+              Create & Provision
             </Button>
           </DialogFooter>
         </form>
