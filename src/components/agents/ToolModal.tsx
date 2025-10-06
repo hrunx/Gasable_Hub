@@ -82,10 +82,10 @@ def register(mcp):
         Args:
           sql: SQL to execute (SELECT only). If omitted, defaults to provided template.
         """
-        url = os.getenv("SUPABASE_DB_URL", "").strip() or "${args.SUPABASE_DB_URL or ''}"
+        url = os.getenv("SUPABASE_DB_URL", "").strip() or "${(args.SUPABASE_DB_URL ?? '').replace(/"/g, '\\"')}"
         if not url:
             return {"status": "error", "error": "SUPABASE_DB_URL is required"}
-        q = (sql or "${(args.SQL or 'SELECT 1').replace('`','').replace('\\n',' ')}").strip()
+        q = (sql or "${((args.SQL ?? 'SELECT 1').replace(/`/g,'').replace(/\n/g,' '))}").strip()
         if not q.lower().startswith("select"):
             return {"status": "error", "error": "Only read-only SELECT queries are allowed"}
         try:

@@ -49,6 +49,12 @@ export default function Home() {
     refetchInterval: 5000,
   });
 
+  // Orchestrator settings
+  const { data: orchestratorData, refetch: refetchOrch } = useQuery({
+    queryKey: ["orchestrator"],
+    queryFn: api.getOrchestrator,
+  });
+
   const { data: connectionsData } = useQuery({
     queryKey: ["connections"],
     queryFn: api.getConnections,
@@ -396,7 +402,9 @@ export default function Home() {
                       }
                     }}
                   />
-                  <p className="text-xs text-gray-500">Simple keyword map to guide routing (e.g., {"procurement": ["order", "buy"], ...}).</p>
+                  <p className="text-xs text-gray-500">
+                    Simple keyword map to guide routing (e.g., {"{"}"procurement": ["order", "buy"], ...{"}"}).
+                  </p>
                 </div>
               </CardContent>
             </Card>
