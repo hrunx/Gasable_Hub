@@ -621,3 +621,77 @@ INFO:     Finished server process [77129]
 INFO:     Started server process [81249]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [81249]
+INFO:     Started server process [81824]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [81824]
+INFO:     Started server process [82320]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [82320]
+INFO:     Started server process [87299]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'webapp.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [87299]
+INFO:     Started server process [89679]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/uvicorn/__main__.py", line 4, in <module>
+    uvicorn.main()
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/click/core.py", line 1442, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/click/core.py", line 1363, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/click/core.py", line 1226, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/click/core.py", line 794, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/uvicorn/main.py", line 413, in main
+    run(
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/uvicorn/main.py", line 575, in run
+    ChangeReload(config, target=server.run, sockets=[sock]).run()
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/uvicorn/supervisors/basereload.py", line 53, in run
+    for changes in self:
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/uvicorn/supervisors/basereload.py", line 72, in __next__
+    return self.should_restart()
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/uvicorn/supervisors/statreload.py", line 32, in should_restart
+    for file in self.iter_py_files():
+  File "/Users/hrn/Desktop/gasable_mcp/.venv/lib/python3.11/site-packages/uvicorn/supervisors/statreload.py", line 52, in iter_py_files
+    for path in list(reload_dir.rglob("*.py")):
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.11/3.11.13/Frameworks/Python.framework/Versions/3.11/lib/python3.11/pathlib.py", line 968, in rglob
+    for p in selector.select_from(self):
+  File "/opt/homebrew/Cellar/python@3.11/3.11.13/Frameworks/Python.framework/Versions/3.11/lib/python3.11/pathlib.py", line 408, in _select_from
+    for p in successor_select(starting_point, is_dir, exists, scandir):
+  File "/opt/homebrew/Cellar/python@3.11/3.11.13/Frameworks/Python.framework/Versions/3.11/lib/python3.11/pathlib.py", line 355, in _select_from
+    with scandir(parent_path) as scandir_it:
+         ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.11/3.11.13/Frameworks/Python.framework/Versions/3.11/lib/python3.11/pathlib.py", line 938, in _scandir
+    return os.scandir(self)
+           ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/hrn/Desktop/gasable_mcp/node_modules/tinyglobby/node_modules/picomatch/lib'

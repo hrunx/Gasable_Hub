@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api } from "@/lib/api";
+// import { api } from "@/lib/api";
 
 interface ToolModalProps {
   open: boolean;
@@ -39,11 +39,11 @@ def register(mcp):
     @mcp.tool()
     def n8n_trigger(payload: dict, ctx: Context | None = None) -> dict:
         """Send a JSON payload to n8n webhook and return response JSON."""
-        url = os.getenv("WEBHOOK_URL", "").strip() or "${args.WEBHOOK_URL or ''}"
+        url = os.getenv("WEBHOOK_URL", "").strip() or "${(args.WEBHOOK_URL ?? '').replace(/"/g, '\\"')}"
         if not url:
             return {"status": "error", "error": "WEBHOOK_URL not set"}
         headers = {"Content-Type": "application/json"}
-        extra = (os.getenv("WEBHOOK_AUTH", "").strip() or "${args.WEBHOOK_AUTH or ''}")
+        extra = (os.getenv("WEBHOOK_AUTH", "").strip() or "${(args.WEBHOOK_AUTH ?? '').replace(/"/g, '\\"')}")
         if extra:
             headers["Authorization"] = extra
         try:

@@ -2,12 +2,9 @@
 steps:
   # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/gasable-hub:$COMMIT_SHA', '-t', 'gcr.io/$PROJECT_ID/gasable-hub:latest', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/gasable-hub:latest', '.']
   
   # Push the Docker image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/gasable-hub:$COMMIT_SHA']
-  
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/gasable-hub:latest']
   
@@ -19,7 +16,7 @@ steps:
       - 'deploy'
       - 'gasable-hub'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/gasable-hub:$COMMIT_SHA'
+      - 'gcr.io/$PROJECT_ID/gasable-hub:latest'
       - '--region'
       - 'europe-west1'
       - '--platform'
@@ -34,9 +31,9 @@ steps:
       - '--quiet'
 
 images:
-  - 'gcr.io/$PROJECT_ID/gasable-hub:$COMMIT_SHA'
   - 'gcr.io/$PROJECT_ID/gasable-hub:latest'
 
 options:
   machineType: 'N1_HIGHCPU_8'
-  timeout: '1200s'
+
+timeout: '1200s'

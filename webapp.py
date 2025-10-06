@@ -604,8 +604,8 @@ def _vector_search_combined(query_vec: list[float], k_each: int = 10) -> list[di
             for r in cur.fetchall():
                 results.append({"source": r[0], "id": r[1], "text": clean_text(r[2]), "score": float(r[3])})
             # embeddings L2 distance (lower is better) → convert to similarity
-            # Try both canonical and 1536 columns if exist
-            for emb_col in ("embedding", "embedding_1536"):
+            # Try 1536 first for speed/consistency; then legacy
+            for emb_col in ("embedding_1536", "embedding"):
                 try:
                     cur.execute(
                         f"""
@@ -915,7 +915,7 @@ def _generate_query_expansions(q: str, lang: str) -> list[str]:
     except Exception:
         pass
     # Limit expansions for latency
-    max_exp = int(os.getenv("RAG_EXPANSIONS", "2"))
+    max_exp = int(os.getenv("RAG_EXPANSIONS", "1"))
     arr = [q]
     seen = {q}
     for x in arr[: 1 + max_exp]:
@@ -936,7 +936,7 @@ def hybrid_search(query: str, top_k: int = 6) -> list[tuple[str, str, float]]:
             for vec in vecs:
                 res = _vector_search_combined(vec, k_each=int(os.getenv("RAG_K_DENSE_EACH", "8")))
                 res.sort(key=lambda r: r["score"], reverse=True)
-                dense_lists.append(res[: int(os.getenv("RAG_K_DENSE_FUSE", "10"))])
+                dense_lists.append(res[: int(os.getenv("RAG_K_DENSE_FUSE", "8"))])
         except Exception:
             pass
     # Lexical results
@@ -959,7 +959,7 @@ def hybrid_search(query: str, top_k: int = 6) -> list[tuple[str, str, float]]:
         lists += [boost] * max(1, boost_weight)
     fused = _rrf_fuse(lists)
     reranked = _rerank_llm(query, fused, top=max(top_k, 12))
-    mmr = _mmr_select(reranked, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.7")))
+    mmr = _mmr_select(reranked, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.6")))
     # Return as tuples (id, text, score)
     out: list[tuple[str, str, float]] = []
     for r in mmr:
@@ -1157,7 +1157,7 @@ async def api_query_stream(request: Request, q: str):
             reranked = _rerank_llm(q, fused, top=max(top_k, 12))
             yield {"event": "step", "data": json.dumps({"step": "rerank", "candidates": len(reranked)})}
             # MMR selection with diversity
-            mmr = _mmr_select(reranked, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.7")))
+            mmr = _mmr_select(reranked, k=top_k, lambda_weight=float(os.getenv("RAG_MMR_LAMBDA", "0.6")))
             yield {"event": "step", "data": json.dumps({"step": "selection", "count": len(mmr)})}
             rows = [(f"{r['source']}:{r['id']}", r.get("text", ""), float(r.get("score", 0.0))) for r in mmr]
             # Answer
@@ -1746,6 +1746,7 @@ class AgentUpsert(BaseModel):
     answer_model: str = "gpt-5"
     rerank_model: str = "gpt-5-mini"
     top_k: int = 12
+    rag_settings: dict | None = None  # e.g., {"rerank": true, "expansions": 1, "k_dense_fuse": 8, "mmr_lambda": 0.6}
 
 
 @app.get("/api/agents")
@@ -1755,7 +1756,7 @@ async def api_agents_list():
             cur.execute(
                 """
                 select id, display_name, namespace, system_prompt, tool_allowlist,
-                       answer_model, rerank_model, top_k, assistant_id
+                       answer_model, rerank_model, top_k, assistant_id, api_key, rag_settings
                 from public.gasable_agents
                 order by id
                 """
@@ -1773,6 +1774,8 @@ async def api_agents_list():
                 "rerank_model": r[6],
                 "top_k": r[7],
                 "assistant_id": r[8],
+                "api_key": r[9],
+                "rag_settings": r[10] or {},
             }
             for r in rows
         ]
@@ -1783,16 +1786,89 @@ async def api_agents_list():
 async def api_agents_upsert(a: AgentUpsert):
     with get_pg_conn() as conn:
         with conn.cursor() as cur:
+            # Optional: rewrite/normalize system_prompt using LLM for clarity
+            try:
+                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                prompt = (
+                    "Rewrite the following agent instruction into a crisp, actionable, "
+                    "safety-aware system prompt for an assistant. Keep intent; improve clarity; "
+                    "avoid meta; use imperative voice. Return only the rewritten prompt.\n\n" + a.system_prompt
+                )
+                resp = client.chat.completions.create(
+                    model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+                    temperature=0,
+                    messages=[
+                        {"role": "system", "content": "You rewrite prompts precisely and safely."},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                sys_rewritten = (resp.choices[0].message.content or a.system_prompt).strip()
+            except Exception:
+                sys_rewritten = a.system_prompt
             cur.execute(
                 """
-                insert into public.gasable_agents (id, display_name, system_prompt, tool_allowlist, namespace, answer_model, rerank_model, top_k)
-                values (%s,%s,%s,%s,%s,%s,%s,%s)
-                on conflict (id) do update set display_name=excluded.display_name, system_prompt=excluded.system_prompt, tool_allowlist=excluded.tool_allowlist, namespace=excluded.namespace, answer_model=excluded.answer_model, rerank_model=excluded.rerank_model, top_k=excluded.top_k, updated_at=now()
+                insert into public.gasable_agents (id, display_name, system_prompt, tool_allowlist, namespace, answer_model, rerank_model, top_k, rag_settings)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                on conflict (id) do update set display_name=excluded.display_name, system_prompt=excluded.system_prompt, tool_allowlist=excluded.tool_allowlist, namespace=excluded.namespace, answer_model=excluded.answer_model, rerank_model=excluded.rerank_model, top_k=excluded.top_k, rag_settings=excluded.rag_settings, updated_at=now()
                 """,
-                (a.id, a.display_name, a.system_prompt, a.tool_allowlist, a.namespace, a.answer_model, a.rerank_model, a.top_k),
+                (a.id, a.display_name, sys_rewritten, a.tool_allowlist, a.namespace, a.answer_model, a.rerank_model, a.top_k, getattr(a, "rag_settings", {}) or {}),
             )
             conn.commit()
     return {"status": "ok"}
+
+
+@app.post("/api/agents/{agent_id}/rotate_key")
+async def api_agent_rotate_key(agent_id: str):
+    import secrets
+    new_key = secrets.token_urlsafe(40)
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update public.gasable_agents set api_key=%s, updated_at=now() where id=%s",
+                (new_key, agent_id),
+            )
+            conn.commit()
+    return {"status": "ok", "api_key": new_key}
+
+
+class DirectAgentIn(BaseModel):
+    message: str
+    namespace: str = "global"
+
+
+@app.post("/api/agents/{agent_id}/chat")
+async def api_agent_direct_chat(agent_id: str, payload: DirectAgentIn, request: Request):
+    # Authenticate via X-API-Key header (or Authorization: Bearer ...)
+    provided = request.headers.get("X-API-Key") or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("select api_key, assistant_id from public.gasable_agents where id=%s", (agent_id,))
+            row = cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "agent not found"}, status_code=404)
+    api_key, assistant_id = row[0], row[1]
+    if not api_key or provided != api_key:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not assistant_id:
+        return JSONResponse({"error": "assistant not provisioned"}, status_code=400)
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    thread = client.beta.threads.create()
+    client.beta.threads.messages.create(thread_id=thread.id, role="user", content=payload.message)
+    run = client.beta.threads.runs.create(
+        thread_id=thread.id,
+        assistant_id=assistant_id,
+        tool_choice="auto",
+        metadata={"namespace": payload.namespace, "agent_id": agent_id},
+    )
+    while True:
+        r = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+        if r.status in ("completed", "failed", "requires_action", "expired", "cancelled"):
+            break
+    msgs = client.beta.threads.messages.list(thread_id=thread.id)
+    final = next((m for m in msgs.data if m.role == "assistant"), None)
+    text = final.content[0].text.value if (final and final.content) else ""
+    return {"message": text, "status": r.status}
 
 
 @app.post("/api/assistants/provision")

@@ -122,9 +122,11 @@ List all available AI agents.
       "namespace": "global",
       "system_prompt": "You are a support agent...",
       "tool_allowlist": ["rag.search"],
-      "answer_model": "gpt-4o-mini",
-      "rerank_model": "gpt-4o-mini",
-      "top_k": 12
+      "answer_model": "gpt-5",
+      "rerank_model": "gpt-5-mini",
+      "top_k": 12,
+      "assistant_id": "asst_...",
+      "api_key": "<redacted>"
     }
   ]
 }
@@ -141,8 +143,8 @@ Create or update an agent.
   "namespace": "global",
   "system_prompt": "You are a custom agent...",
   "tool_allowlist": ["rag.search", "orders.place"],
-  "answer_model": "gpt-4o-mini",
-  "rerank_model": "gpt-4o-mini",
+  "answer_model": "gpt-5",
+  "rerank_model": "gpt-5-mini",
   "top_k": 12
 }
 ```
@@ -153,6 +155,30 @@ Create or update an agent.
   "status": "ok",
   "agent_id": "custom_agent"
 }
+```
+
+### POST `/api/agents/{agent_id}/rotate_key`
+Generate or rotate the API key for the agent.
+
+**Response:**
+```json
+{ "status": "ok", "api_key": "<new key>" }
+```
+
+### POST `/api/agents/{agent_id}/chat`
+Direct chat with a specific agent using the agent API key.
+
+**Headers:**
+- `X-API-Key: <agent_api_key>` (or `Authorization: Bearer <key>`)
+
+**Request:**
+```json
+{ "message": "Hello", "namespace": "global" }
+```
+
+**Response:**
+```json
+{ "message": "...", "status": "completed" }
 ```
 
 ---

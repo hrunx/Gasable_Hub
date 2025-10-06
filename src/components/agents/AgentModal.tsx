@@ -38,7 +38,14 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
     answer_model: agent?.answer_model || "gpt-5",
     rerank_model: agent?.rerank_model || "gpt-5-mini",
     top_k: agent?.top_k || 12,
+    rag_settings: (agent as any)?.rag_settings || {
+      rerank: true,
+      expansions: 1,
+      k_dense_fuse: 8,
+      mmr_lambda: 0.6,
+    },
   });
+  const [apiKey, setApiKey] = useState<string | undefined>(agent ? (agent as { api_key?: string }).api_key : undefined);
 
   const [selectedTools, setSelectedTools] = useState<string[]>(
     agent?.tool_allowlist || []
@@ -56,8 +63,15 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
         answer_model: agent?.answer_model || "gpt-5",
         rerank_model: agent?.rerank_model || "gpt-5-mini",
         top_k: agent?.top_k || 12,
+        rag_settings: (agent as any)?.rag_settings || {
+          rerank: true,
+          expansions: 1,
+          k_dense_fuse: 8,
+          mmr_lambda: 0.6,
+        },
       });
       setSelectedTools(agent?.tool_allowlist || []);
+      setApiKey(agent ? (agent as { api_key?: string }).api_key : undefined);
     }
   }, [agent, open]);
 
@@ -95,6 +109,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
         answer_model: "gpt-5",
         rerank_model: "gpt-5-mini",
         top_k: 12,
+        rag_settings: formData.rag_settings,
         tool_allowlist: selectedTools,
       },
       {
@@ -103,7 +118,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
           try {
             await api.syncAssistants();
             queryClient.invalidateQueries({ queryKey: ["agents"] });
-          } catch (_) {
+          } catch {
             // Best-effort: ignore sync failure in UI
           }
         },
@@ -237,8 +252,100 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
           </div>
 
           {/* Models and Top K are set to safe defaults and hidden */}
+          {/* RAG Settings */}
+          <div className="space-y-3 mt-4">
+            <Label>RAG Settings</Label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={!!formData.rag_settings.rerank}
+                    onChange={(e) => setFormData({
+                      ...formData,
+                      rag_settings: { ...formData.rag_settings, rerank: e.target.checked }
+                    })}
+                  />
+                  Enable LLM Rerank
+                </label>
+                <p className="text-xs text-gray-500">Improves result quality by reordering context with AI. Turn off for maximum speed.</p>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Query Expansions</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={3}
+                  value={formData.rag_settings.expansions}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    rag_settings: { ...formData.rag_settings, expansions: parseInt(e.target.value || '0') }
+                  })}
+                />
+                <p className="text-xs text-gray-500">Extra phrasing variants to broaden retrieval. 0–1 recommended for speed.</p>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Dense Fuse (per expansion)</Label>
+                <Input
+                  type="number"
+                  min={4}
+                  max={16}
+                  value={formData.rag_settings.k_dense_fuse}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    rag_settings: { ...formData.rag_settings, k_dense_fuse: parseInt(e.target.value || '8') }
+                  })}
+                />
+                <p className="text-xs text-gray-500">How many top dense results to keep per expanded query.</p>
+              </div>
+
+              <div className="space-y-1">
+                <Label>MMR Lambda</Label>
+                <Input
+                  type="number"
+                  step="0.05"
+                  min={0}
+                  max={1}
+                  value={formData.rag_settings.mmr_lambda}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    rag_settings: { ...formData.rag_settings, mmr_lambda: parseFloat(e.target.value || '0.6') }
+                  })}
+                />
+                <p className="text-xs text-gray-500">Balance between relevance and diversity (higher = relevance).</p>
+              </div>
+            </div>
+          </div>
 
           <DialogFooter>
+            {agent && (
+              <div className="mr-auto flex items-center gap-2 text-xs">
+                <span className="font-medium">API Key:</span>
+                <span className="px-2 py-1 bg-gray-100 rounded border select-all">
+                  {apiKey || "(not set)"}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    if (!agent) return;
+                    try {
+                      const res = await fetch(`/api/agents/${agent.id}/rotate_key`, { method: "POST" });
+                      const data = await res.json();
+                      if (data.api_key) {
+                        setApiKey(data.api_key);
+                        navigator.clipboard?.writeText(data.api_key).catch(() => {});
+                      }
+                    } catch {}
+                  }}
+                >
+                  {apiKey ? "Rotate" : "Generate"}
+                </Button>
+              </div>
+            )}
             <Button
               type="button"
               variant="outline"

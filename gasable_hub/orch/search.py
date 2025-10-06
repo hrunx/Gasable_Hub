@@ -14,6 +14,8 @@ EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 EMBED_DIM = int(os.getenv("OPENAI_EMBED_DIM", "1536"))
 
 _oai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+EMBED_TTL_SEC = int(os.getenv("EMBED_TTL_SEC", "600") or 600)
+_EMBED_CACHE: dict[str, tuple[List[float], float]] = {}
 
 
 def _pg():
@@ -22,8 +24,17 @@ def _pg():
 
 
 def embed_query(q: str) -> List[float]:
+    now = __import__("time").time()
+    ent = _EMBED_CACHE.get(q)
+    if ent and (now - ent[1] < EMBED_TTL_SEC):
+        return ent[0]
     res = _oai.embeddings.create(model=EMBED_MODEL, input=q, dimensions=EMBED_DIM)
-    return res.data[0].embedding
+    vec = res.data[0].embedding
+    _EMBED_CACHE[q] = (vec, now)
+    # Simple size control
+    if len(_EMBED_CACHE) > 2048:
+        _EMBED_CACHE.pop(next(iter(_EMBED_CACHE)))
+    return vec
 
 
 def _safe_embed_col() -> str:
@@ -133,9 +144,11 @@ def dedupe(hits: List[Dict]) -> List[Dict]:
     return out
 
 
-def rerank_llm(q: str, hits: List[Dict], top: int = 12, model: str = "gpt-5-mini") -> List[Dict]:
+def rerank_llm(q: str, hits: List[Dict], top: int = 12, model: str = "gpt-5-mini", enabled: bool = True) -> List[Dict]:
     if not hits:
         return hits
+    if not enabled or str(os.getenv("RAG_RERANK", "1")).lower() not in ("1", "true"):  # allow disabling for speed
+        return hits[:top]
     def snip(s: str) -> str:
         return (s or "").replace("\n", " ")[:1200]
     passages = "\n\n".join(f"[{i}] {snip(h.get('txt',''))}" for i, h in enumerate(hits))
@@ -160,10 +173,27 @@ def rerank_llm(q: str, hits: List[Dict], top: int = 12, model: str = "gpt-5-mini
     return scored[:top]
 
 
+def _load_agent_rag_settings(agent_id: str) -> Dict:
+    try:
+        with _pg() as conn, conn.cursor() as cur:
+            cur.execute("select rag_settings from public.gasable_agents where id=%s", (agent_id,))
+            row = cur.fetchone()
+        return (row[0] or {}) if row else {}
+    except Exception:
+        return {}
+
+
 def hybrid_query(q: str, agent_id: str, namespace: str, k: int = 12) -> Dict:
+    cfg = _load_agent_rag_settings(agent_id)
     qvec = embed_query(q)
     v = vector_search(qvec, agent_id, namespace, k=40)
     b = bm25_search(q, agent_id, namespace, k=40)
     hits = dedupe(v + b)
-    hits = rerank_llm(q, hits, top=max(k, 12))
+    hits = rerank_llm(
+        q,
+        hits,
+        top=max(k, 12),
+        model=str(cfg.get("rerank_model") or os.getenv("RERANK_MODEL", os.getenv("OPENAI_MODEL", "gpt-5-mini"))),
+        enabled=bool(cfg.get("rerank", True)),
+    )
     return {"hits": hits[:k]}

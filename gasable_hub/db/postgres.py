@@ -62,6 +62,19 @@ def run_migrations(migrations_dir: str | None = None) -> list[str]:
     dir_path = migrations_dir or settings.migrations_dir
     os.makedirs(dir_path, exist_ok=True)
     applied: list[str] = []
+    # Optional controls via env:
+    # - SKIP_MIGRATIONS: comma-separated list of filenames to skip
+    # - ALLOW_DESTRUCTIVE_MIGRATIONS: set to 1/true to allow DROP/ALTER DROP
+    skip_set = {name.strip() for name in (os.getenv("SKIP_MIGRATIONS") or "").split(",") if name.strip()}
+    allow_destructive = (os.getenv("ALLOW_DESTRUCTIVE_MIGRATIONS", "0") in ("1", "true", "True"))
+
+    def _is_destructive(sql: str) -> bool:
+        lowered = sql.lower()
+        if "drop table" in lowered or "drop index" in lowered:
+            return True
+        if "alter table" in lowered and " drop " in lowered:
+            return True
+        return False
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -80,8 +93,17 @@ def run_migrations(migrations_dir: str | None = None) -> list[str]:
                     continue
                 if name in done:
                     continue
+                if name in skip_set:
+                    # Explicitly skipped by operator
+                    print(f"Skipping migration (operator skip): {name}")
+                    continue
                 with open(os.path.join(dir_path, name), "r", encoding="utf-8") as f:
                     sql = f.read()
+                if not allow_destructive and _is_destructive(sql):
+                    print(
+                        f"Skipping destructive migration: {name} (set ALLOW_DESTRUCTIVE_MIGRATIONS=1 to apply)"
+                    )
+                    continue
                 cur.execute(sql)
                 cur.execute(
                     "INSERT INTO public.schema_migrations (id) VALUES (%s)",
