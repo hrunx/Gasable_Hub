@@ -13,7 +13,7 @@ def _safe_embed_col() -> str:
     col = (os.getenv("PG_EMBED_COL") or "").strip()
     if col in ("embedding", "embedding_1536"):
         return col
-    dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
+    dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
     return "embedding_1536" if dim == 1536 else "embedding"
 
 def register(mcp):
@@ -70,5 +70,4 @@ def _upsert_embeddings_docs(docs: list[dict]) -> int:
 				inserts += 1
 			conn.commit()
 	return inserts
-
 

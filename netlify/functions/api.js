@@ -58,13 +58,16 @@ async function getClient() {
 }
 
 // --- RAG helpers (hybrid retrieval + formatting) ---
-const EMBED_MODEL = process.env.EMBED_MODEL || 'text-embedding-3-large';
+const EMBED_MODEL = process.env.EMBED_MODEL || 'text-embedding-3-small';
 const SCHEMA = process.env.PG_SCHEMA || 'public';
 const TABLE = process.env.PG_TABLE || 'gasable_index';
 const ANSWER_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini';
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
-const EMBED_COL = (process.env.PG_EMBED_COL || 'embedding').replace(/[^a-zA-Z0-9_]/g,'');
+const EMBED_DIM = Number(process.env.EMBED_DIM || 1536);
+const EMBED_COL = (process.env.PG_EMBED_COL || 'embedding_1536').replace(/[^a-zA-Z0-9_]/g,'');
+const EMBED_PREVIEW_EXPR = EMBED_COL === 'embedding_1536'
+  ? "COALESCE(embedding_1536, embedding)"
+  : EMBED_COL;
 const TOP_K = Number(process.env.TOP_K || 40);
 const USE_BM25 = String(process.env.USE_BM25 || 'false').toLowerCase() === 'true';
 const RERANK_MODEL = process.env.RERANK_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini';
@@ -393,7 +396,9 @@ exports.handler = async (event, context) => {
       if (!file) return json(200, { entries: [] });
       const like = file + '#%';
       const r = await db.query(`
-        SELECT node_id, COALESCE(text,''), CASE WHEN embedding IS NULL THEN NULL ELSE embedding::text END AS embedding_text
+        SELECT node_id,
+               COALESCE(text,'') AS text,
+               CASE WHEN ${EMBED_PREVIEW_EXPR} IS NULL THEN NULL ELSE ${EMBED_PREVIEW_EXPR}::text END AS embedding_text
         FROM public.gasable_index
         WHERE node_id LIKE $1
         ORDER BY node_id
@@ -401,7 +406,7 @@ exports.handler = async (event, context) => {
       `, [like, offset, limit]);
       const entries = r.rows.map(row => {
         const emb = row.embedding_text || '';
-        const text = row.coalesce || row.text || '';
+        const text = row.text || '';
         if (!full && emb) return { node_id: row.node_id, text, embedding_preview: emb.slice(0, 256), embedding_dim: null };
         return { node_id: row.node_id, text, embedding: emb };
       });
@@ -588,5 +593,3 @@ exports.handler = async (event, context) => {
     try { if (db) await db.end(); } catch (_) {}
   }
 };
-
-

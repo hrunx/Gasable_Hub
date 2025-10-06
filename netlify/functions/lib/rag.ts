@@ -54,11 +54,11 @@ export interface HybridResult {
   elapsedMs: number;
 }
 
-const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-large";
-const EMBED_DIM = Number(process.env.EMBED_DIM || 3072);
+const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-small";
+const EMBED_DIM = Number(process.env.EMBED_DIM || 1536);
 const SCHEMA = process.env.PG_SCHEMA || "public";
 const TABLE = process.env.PG_TABLE || "gasable_index";
-const EMBED_COL_DEFAULT = (process.env.PG_EMBED_COL || "embedding").replace(/[^a-zA-Z0-9_]/g, "");
+const EMBED_COL_DEFAULT = (process.env.PG_EMBED_COL || "embedding_1536").replace(/[^a-zA-Z0-9_]/g, "");
 const ARABIC_RE = /[\u0600-\u06FF]/;
 const STRICT_CONTEXT_ONLY = String(process.env.STRICT_CONTEXT_ONLY || "false").toLowerCase() !== "false";
 

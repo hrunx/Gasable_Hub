@@ -42,22 +42,35 @@ from gasable_hub.workflows import WorkflowExecutionError, execute_workflow
 from pydantic import BaseModel
 
 
+logger = logging.getLogger("gasable_hub.webapp")
+
+
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-# Mount static only if directory exists to avoid runtime errors on Cloud Run.
-# Use absolute path relative to this file to avoid CWD issues under different runners.
+
+
+def _resolve_static_root() -> Path:
+	custom_root = os.getenv("STATIC_ROOT")
+	if custom_root:
+		return Path(custom_root).expanduser().resolve()
+	return Path(__file__).resolve().parent / "static"
+
+
 try:
-	_static_dir = (Path(__file__).resolve().parent / "static")
+	_static_dir = _resolve_static_root()
 	if _static_dir.is_dir():
 		app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+	else:
+		logger.warning("Skipping static mount; directory missing at %s", _static_dir)
+except RuntimeError as exc:
+	logger.warning("Skipping static mount; %s", exc)
 except Exception:
-	pass
+	logger.exception("Failed to mount static assets")
 
 # Load local environment variables for development parity
 load_dotenv(override=True)
 
 # Provision assistants on boot if requested (no-op if already created)
-logger = logging.getLogger("gasable_hub.webapp")
 
 
 @app.on_event("startup")
@@ -112,7 +125,7 @@ def _default_embed_model() -> str:
 	model = (os.getenv("OPENAI_EMBED_MODEL") or os.getenv("EMBED_MODEL") or "").strip()
 	if model:
 		return model
-	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
+	dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
 	return "text-embedding-3-small" if dim == 1536 else "text-embedding-3-large"
 
 
@@ -1175,25 +1188,25 @@ async def api_mcp_tools():
 
 @app.post("/api/mcp_invoke")
 async def api_mcp_invoke(payload: dict, request: Request):
-	"""Invoke an MCP tool by name with arguments.
+    """Invoke an MCP tool by name with arguments.
 
-	Body: { "name": string, "args": object }
-	Auth: optional bearer token via env API_TOKEN; if set, requests must include
-	      Authorization: Bearer <token>
-	"""
-	token = os.getenv("API_TOKEN")
-	if not token:
-		return JSONResponse({"error": "MCP invoke disabled (API_TOKEN not set)"}, status_code=403)
-	auth_header = request.headers.get("Authorization", "")
-	api_key = request.headers.get("X-API-Key")
-	if auth_header.startswith("Bearer "):
-		provided = auth_header.split(" ", 1)[1].strip()
-	else:
-		provided = api_key.strip() if api_key else ""
-	if provided != token:
-		return JSONResponse({"error": "Unauthorized"}, status_code=401)
-	name = (payload.get("name") or "").strip()
-	args = payload.get("args") or {}
+    Body: { "name": string, "args": object }
+    Auth: optional bearer token via env API_TOKEN; if set, requests must include
+          Authorization: Bearer <token>
+    """
+    token = os.getenv("API_TOKEN")
+    if not token:
+        return JSONResponse({"error": "MCP invoke disabled (API_TOKEN not set)"}, status_code=403)
+    auth_header = request.headers.get("Authorization", "")
+    api_key = request.headers.get("X-API-Key")
+    if auth_header.startswith("Bearer "):
+        provided = auth_header.split(" ", 1)[1].strip()
+    else:
+        provided = api_key.strip() if api_key else ""
+    if provided != token:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    name = (payload.get("name") or "").strip()
+    args = payload.get("args") or {}
     if not name:
         return JSONResponse({"error": "name is required"}, status_code=400)
     try:
@@ -1210,56 +1223,56 @@ async def api_mcp_invoke(payload: dict, request: Request):
 
 @app.post("/api/ingest_drive")
 async def api_ingest_drive(payload: dict):
-	folder_id = payload.get("folder_id") or os.getenv("GDRIVE_FOLDER_ID") or os.getenv("FOLDER_ID")
-	if not folder_id:
-		return JSONResponse({"error": "folder_id required"}, status_code=400)
-	try:
-		service = authenticate_google_drive()
-		docs = fetch_text_documents_recursive(service, folder_id)
-		if not docs:
-			return {"status": "ok", "ingested": 0}
-		# Store directly into gasable_index with embeddings
-		written = upsert_embeddings(docs)
-		return {"status": "ok", "ingested": len(docs), "written": written}
-	except Exception as e:
-		return JSONResponse({"error": str(e)}, status_code=500)
+    folder_id = payload.get("folder_id") or os.getenv("GDRIVE_FOLDER_ID") or os.getenv("FOLDER_ID")
+    if not folder_id:
+        return JSONResponse({"error": "folder_id required"}, status_code=400)
+    try:
+        service = authenticate_google_drive()
+        docs = fetch_text_documents_recursive(service, folder_id)
+        if not docs:
+            return {"status": "ok", "ingested": 0}
+        # Store directly into gasable_index with embeddings
+        written = upsert_embeddings(docs)
+        return {"status": "ok", "ingested": len(docs), "written": written}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/db_stats")
 async def api_db_stats():
-	with get_pg_conn() as conn:
-		with conn.cursor() as cur:
-			# Prefer exact count for clarity on dashboard
-			cur.execute("SELECT COUNT(*) FROM public.gasable_index")
-			count = cur.fetchone()[0]
-			cur.execute("SELECT COUNT(*) FROM public.embeddings")
-			emb_count = cur.fetchone()[0]
-			cur.execute("SELECT COUNT(*) FROM public.documents")
-			doc_count = cur.fetchone()[0]
-			cur.execute("SELECT node_id, left(text, 200) FROM public.gasable_index LIMIT 3")
-			samples = cur.fetchall()
-			# Column diagnostics
-			emb_1536 = None
-			try:
-				cur.execute("SELECT COUNT(*) FROM public.gasable_index WHERE embedding_1536 IS NOT NULL")
-				emb_1536 = cur.fetchone()[0]
-			except Exception:
-				emb_1536 = None
-			emb_legacy = None
-			try:
-				cur.execute("SELECT COUNT(*) FROM public.gasable_index WHERE embedding IS NOT NULL")
-				emb_legacy = cur.fetchone()[0]
-			except Exception:
-				emb_legacy = None
-			active_col = _safe_embed_col()
-	return {
-		"gasable_index": int(count),
-		"embeddings": int(emb_count),
-		"documents": int(doc_count),
-		"samples": samples,
-		"embedding_col": active_col,
-		"embedding_counts": {"embedding": emb_legacy, "embedding_1536": emb_1536},
-	}
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            # Prefer exact count for clarity on dashboard
+            cur.execute("SELECT COUNT(*) FROM public.gasable_index")
+            count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM public.embeddings")
+            emb_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM public.documents")
+            doc_count = cur.fetchone()[0]
+            cur.execute("SELECT node_id, left(text, 200) FROM public.gasable_index LIMIT 3")
+            samples = cur.fetchall()
+            # Column diagnostics
+            emb_1536 = None
+            try:
+                cur.execute("SELECT COUNT(*) FROM public.gasable_index WHERE embedding_1536 IS NOT NULL")
+                emb_1536 = cur.fetchone()[0]
+            except Exception:
+                emb_1536 = None
+            emb_legacy = None
+            try:
+                cur.execute("SELECT COUNT(*) FROM public.gasable_index WHERE embedding IS NOT NULL")
+                emb_legacy = cur.fetchone()[0]
+            except Exception:
+                emb_legacy = None
+            active_col = _safe_embed_col()
+    return {
+        "gasable_index": int(count),
+        "embeddings": int(emb_count),
+        "documents": int(doc_count),
+        "samples": samples,
+        "embedding_col": active_col,
+        "embedding_counts": {"embedding": emb_legacy, "embedding_1536": emb_1536},
+    }
 
 
 @app.get("/api/status")

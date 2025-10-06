@@ -73,6 +73,10 @@ Cloud Run Container
 
 ### Method 2: Manual (via Docker)
 
+> ⚠️ Replace `YOUR_PROJECT_ID` with your actual Google Cloud project ID. Using the
+> placeholder value will cause Cloud Run to fail with
+> `Image not found: gcr.io/PROJECT_ID/gasable-hub:latest`.
+
 1. **Build Docker Image**
    ```bash
    docker build -t gcr.io/YOUR_PROJECT_ID/gasable-hub:latest .
@@ -96,6 +100,18 @@ Cloud Run Container
      --timeout 300 \
      --set-env-vars ENVIRONMENT=production
    ```
+
+#### Helper script (recommended)
+
+To guard against accidentally using the placeholder project ID, run:
+
+```bash
+./scripts/deploy_cloud_run.sh YOUR_PROJECT_ID
+```
+
+The script resolves the project, builds the container image, and deploys it to
+Cloud Run with the same flags as above. You can also export `PROJECT_ID` and run
+the script without arguments.
 
 ### Method 3: Direct Source (Simplest)
 
@@ -322,4 +338,3 @@ gcloud run services delete gasable-hub --region europe-west1
 ---
 
 **Status**: ✅ Ready for deployment!
-

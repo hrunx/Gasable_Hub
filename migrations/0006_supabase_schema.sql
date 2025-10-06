@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS public.embeddings (
 	document_id BIGINT NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
 	chunk_index INT NOT NULL,
 	chunk_text TEXT NOT NULL,
-	embedding vector(3072) NOT NULL,
+	embedding vector(1536) NOT NULL,
 	created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -34,7 +34,7 @@ BEGIN
 		SELECT 1 FROM information_schema.columns
 		WHERE table_schema = 'public' AND table_name = 'embeddings' AND column_name = 'embedding'
 	) THEN
-		ALTER TABLE public.embeddings ADD COLUMN embedding vector(3072);
+		ALTER TABLE public.embeddings ADD COLUMN embedding vector(1536);
 	END IF;
 BEGIN
 	ALTER TABLE public.embeddings ALTER COLUMN embedding SET NOT NULL;
@@ -47,7 +47,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS public.gasable_index (
 	node_id TEXT PRIMARY KEY,
 	text TEXT,
-	embedding vector(3072),
+	embedding vector(1536),
 	li_metadata JSONB DEFAULT '{}'::jsonb
 );
 
@@ -60,7 +60,7 @@ BEGIN
 		SELECT 1 FROM information_schema.columns
 		WHERE table_schema = 'public' AND table_name = 'gasable_index' AND column_name = 'embedding'
 	) THEN
-		ALTER TABLE public.gasable_index ADD COLUMN embedding vector(3072);
+		ALTER TABLE public.gasable_index ADD COLUMN embedding vector(1536);
 	END IF;
 END $$;
 

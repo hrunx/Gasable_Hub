@@ -1,6 +1,6 @@
 import { Client } from "pg";
 
-function padVector(vec, dim = 3072) {
+function padVector(vec, dim = 1536) {
   const out = Array.isArray(vec) ? vec.slice(0, dim) : [];
   while (out.length < dim) out.push(0);
   return out;
@@ -20,7 +20,11 @@ function parseVectorText(text) {
 
 async function main() {
   const batchSize = Number(process.env.BATCH_SIZE || 1000);
-  const embedDim = Number(process.env.EMBED_DIM || 3072);
+  const embedDim = Number(process.env.EMBED_DIM || 1536);
+  const embedCol = (process.env.PG_EMBED_COL || (embedDim === 1536 ? 'embedding_1536' : 'embedding')).replace(/[^a-zA-Z0-9_]/g, '');
+  const sourceEmbeddingExpr = embedCol === 'embedding_1536'
+    ? "COALESCE(embedding_1536, embedding)"
+    : embedCol;
 
   // Source (local) connection
   const srcUrl = process.env.LOCAL_DATABASE_URL || `postgresql://${process.env.PG_USER || "hrn"}:${process.env.PG_PASSWORD || "tryharder"}@${process.env.PG_HOST || "localhost"}:${process.env.PG_PORT || 5432}/${process.env.PG_DBNAME || "gasable_db"}`;
@@ -43,7 +47,7 @@ async function main() {
     let offset = 0;
     while (offset < total) {
       const { rows } = await src.query(
-        `SELECT node_id, text, embedding::text AS embedding_text, COALESCE(li_metadata, '{}'::jsonb) AS li_metadata
+        `SELECT node_id, text, ${sourceEmbeddingExpr}::text AS embedding_text, COALESCE(li_metadata, '{}'::jsonb) AS li_metadata
          FROM public.gasable_index
          ORDER BY node_id
          LIMIT $1 OFFSET $2`,
@@ -62,11 +66,11 @@ async function main() {
         .join(",");
       const flat = prepared.flat();
       const sql = `
-        INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
+        INSERT INTO public.gasable_index (node_id, text, ${embedCol}, li_metadata)
         VALUES ${valuesSql}
         ON CONFLICT (node_id) DO UPDATE SET
           text = EXCLUDED.text,
-          embedding = EXCLUDED.embedding,
+          ${embedCol} = EXCLUDED.${embedCol},
           li_metadata = COALESCE(public.gasable_index.li_metadata, '{}'::jsonb) || COALESCE(EXCLUDED.li_metadata, '{}'::jsonb)
       `;
       await dst.query(sql, flat);

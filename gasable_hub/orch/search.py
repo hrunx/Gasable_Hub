@@ -10,7 +10,7 @@ from openai import OpenAI
 from ..db.postgres import connect as pg_connect
 
 
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 EMBED_DIM = int(os.getenv("OPENAI_EMBED_DIM", "1536"))
 
 _oai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

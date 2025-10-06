@@ -15,7 +15,7 @@ def _safe_embed_col() -> str:
     col = (os.getenv("PG_EMBED_COL") or "").strip()
     if col in ("embedding", "embedding_1536"):
         return col
-    dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "3072")) or 3072)
+    dim = int(os.getenv("EMBED_DIM", os.getenv("OPENAI_EMBED_DIM", "1536")) or 1536)
     return "embedding_1536" if dim == 1536 else "embedding"
 
 
@@ -92,7 +92,7 @@ def _ensure_db_ready(logger: logging.Logger) -> None:
 def ingest_path_with_llamaindex(
 	path: str,
 	chunk_chars: int = 4000,
-	embed_model: str = "text-embedding-3-large",
+	embed_model: str = "text-embedding-3-small",
 	log_file: Optional[str] = None,
 	resume: bool = False,
 ) -> None:
@@ -195,7 +195,7 @@ def main() -> None:
 	parser = argparse.ArgumentParser(description="Ingest local folder into PGVector using LlamaIndex embeddings")
 	parser.add_argument("--path", default=os.getenv("LOCAL_INGEST_PATH", "/Users/hrn/Desktop/Gasable_hrn"), help="Root folder to ingest")
 	parser.add_argument("--chunk-chars", type=int, default=int(os.getenv("CHUNK_CHARS", "4000")), help="Characters per chunk")
-	parser.add_argument("--embed-model", default=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large"), help="OpenAI embedding model for LlamaIndex")
+	parser.add_argument("--embed-model", default=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small"), help="OpenAI embedding model for LlamaIndex")
 	parser.add_argument("--log-file", default=os.getenv("INGEST_LOG_FILE", "logs/run_local_ingest.log"), help="Optional log file path")
 	parser.add_argument("--resume", action="store_true", help="Skip chunks already present in public.gasable_index")
 	args = parser.parse_args()
@@ -211,5 +211,3 @@ def main() -> None:
 
 if __name__ == "__main__":
 	main()
-
-

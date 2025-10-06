@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import { Client } from "pg";
 
-function padVector(vec, dim = 3072) {
+function padVector(vec, dim = 1536) {
   const out = Array.isArray(vec) ? vec.slice(0, dim) : [];
   while (out.length < dim) out.push(0);
   return out;
@@ -29,7 +29,8 @@ async function main() {
     : "gasable_index.json";
   const embedDim = process.argv.includes("--embed-dim")
     ? Number(process.argv[process.argv.indexOf("--embed-dim") + 1])
-    : Number(process.env.EMBED_DIM || 3072);
+    : Number(process.env.EMBED_DIM || 1536);
+  const embedCol = (process.env.PG_EMBED_COL || (embedDim === 1536 ? "embedding_1536" : "embedding")).replace(/[^a-zA-Z0-9_]/g, "");
   const startIndex = process.argv.includes("--start")
     ? Number(process.argv[process.argv.indexOf("--start") + 1])
     : 0;
@@ -70,11 +71,11 @@ async function main() {
         .join(",");
       const flatParams = rows.flat();
       const sql = `
-        INSERT INTO public.gasable_index (node_id, text, embedding, li_metadata)
+        INSERT INTO public.gasable_index (node_id, text, ${embedCol}, li_metadata)
         VALUES ${valuesSql}
         ON CONFLICT (node_id) DO UPDATE SET
           text = EXCLUDED.text,
-          embedding = EXCLUDED.embedding,
+          ${embedCol} = EXCLUDED.${embedCol},
           li_metadata = COALESCE(public.gasable_index.li_metadata, '{}'::jsonb) || COALESCE(EXCLUDED.li_metadata, '{}'::jsonb)
       `;
       await client.query(sql, flatParams);
@@ -91,4 +92,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

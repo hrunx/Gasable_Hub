@@ -108,8 +108,8 @@ Active table (RAG): `public.gasable_index`
 CREATE TABLE IF NOT EXISTS public.gasable_index (
   node_id TEXT PRIMARY KEY,
   text TEXT,
-  -- legacy column may exist; current writes/read use embedding_1536
-  embedding vector(3072),
+  -- legacy name kept for compatibility; both columns are 1536-dim
+  embedding vector(1536),
   embedding_1536 vector(1536),
   li_metadata JSONB DEFAULT '{}'::jsonb,
   tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(text,''))) STORED
@@ -150,12 +150,12 @@ CREATE TABLE IF NOT EXISTS public.embeddings (
 Which column is used and why
 - We standardize on `embedding_1536` (1536-dim) for performance and cost.
 - Env `PG_EMBED_COL=embedding_1536` tells the server which vector column to query and write to.
-- If legacy 3072 data exists in `embedding`, you can backfill to `embedding_1536` gradually; queries only use the active column.
+- The `embedding` column is retained for backwards compatibility; newer migrations set it to 1536 dimensions as well.
 
 Useful diagnostics
 ```sql
 -- populated columns
-select count(*) filter (where embedding is not null) as emb_3072,
+select count(*) filter (where embedding is not null) as emb_legacy,
        count(*) filter (where embedding_1536 is not null) as emb_1536
 from public.gasable_index;
 
@@ -178,4 +178,3 @@ LIMIT $2;
 - Retrieval tuning: `RAG_TOP_K`, `RAG_K_DENSE_EACH`, `RAG_K_DENSE_FUSE`, `RAG_K_LEX`, `RAG_KW_PREFILTER_LIMIT`, `RAG_MMR_LAMBDA`, `RAG_BRAND_BOOST_WEIGHT`
 - `API_TOKEN` (optional) – shared secret for `/api/mcp_invoke`
 - `CORS_ORIGINS` – allowed origins for browser apps (e.g., `https://app.gasable.com, https://intranet.gasable.local`)
-
