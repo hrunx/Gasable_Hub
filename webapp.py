@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from fastapi.templating import Jinja2Templates
 from openai import OpenAI
 import psycopg2
@@ -42,10 +43,12 @@ from openai import OpenAI
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-# Mount static only if directory exists to avoid runtime errors on Cloud Run
+# Mount static only if directory exists to avoid runtime errors on Cloud Run.
+# Use absolute path relative to this file to avoid CWD issues under different runners.
 try:
-	if os.path.isdir("static"):
-		app.mount("/static", StaticFiles(directory="static"), name="static")
+	_static_dir = (Path(__file__).resolve().parent / "static")
+	if _static_dir.is_dir():
+		app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 except Exception:
 	pass
 
