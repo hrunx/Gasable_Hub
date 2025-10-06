@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
-import psycopg2
 from openai import OpenAI
+
+from ..db.postgres import connect as pg_connect
 
 
 def _pg():
-	dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
-	return psycopg2.connect(dsn, sslmode="require")
+	"""Centralised Postgres connection helper respecting all env sources."""
+	return pg_connect()
 
 
 def _mcp_tool() -> dict:
@@ -51,5 +52,3 @@ def ensure_assistants() -> int:
 				created += 1
 			conn.commit()
 	return created
-
-

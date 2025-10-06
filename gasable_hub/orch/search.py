@@ -5,12 +5,11 @@ import json
 import re
 from typing import List, Dict
 
-import psycopg2
-import psycopg2.extras
 from openai import OpenAI
 
+from ..db.postgres import connect as pg_connect
 
-DB_URL = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or os.getenv("NETLIFY_DATABASE_URL")
+
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
 EMBED_DIM = int(os.getenv("OPENAI_EMBED_DIM", "1536"))
 
@@ -18,7 +17,8 @@ _oai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def _pg():
-	return psycopg2.connect(DB_URL, sslmode="require", cursor_factory=psycopg2.extras.RealDictCursor)
+	"""Return a Postgres connection via the shared helper."""
+	return pg_connect()
 
 
 def embed_query(q: str) -> List[float]:
@@ -116,5 +116,3 @@ def hybrid_query(q: str, agent_id: str, namespace: str, k: int = 12) -> Dict:
 	hits = dedupe(v + b)
 	hits = rerank_llm(q, hits, top=max(k, 12))
 	return {"hits": hits[:k]}
-
-

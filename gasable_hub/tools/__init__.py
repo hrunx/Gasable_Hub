@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import pkgutil
 from types import ModuleType
 from typing import Callable
@@ -11,18 +12,43 @@ REGISTERED_TOOL_SPECS: list[dict] = []
 _TOOL_KEYS: set[str] = set()
 
 
-def _register_tool_meta(name: str, description: str, module: str) -> None:
-	"""Register tool metadata for discovery without duplicating entries.
+def _extract_parameters(fn: Callable) -> list[dict]:
+	params: list[dict] = []
+	sig = inspect.signature(fn)
+	for name, param in sig.parameters.items():
+		if name in {"ctx", "context"}:
+			continue
+		info: dict[str, object] = {"name": name, "kind": param.kind.name.lower()}
+		if param.annotation is not inspect._empty:
+			annotation = param.annotation
+			typename = getattr(annotation, "__name__", None)
+			info["type"] = typename or str(annotation)
+		if param.default is not inspect._empty:
+			info["default"] = param.default
+		params.append(info)
+	return params
 
-	This allows a separate process (e.g., FastAPI web UI) to import this package,
-	perform registrations into a dummy MCP instance, and still discover tool
-	metadata deterministically.
-	"""
+
+def _register_tool_meta(name: str, description: str, module: str, *, parameters: list[dict] | None = None, returns: str | None = None) -> None:
+	"""Register tool metadata for discovery without duplicating entries."""
 	key = f"{module}:{name}"
 	if key in _TOOL_KEYS:
-		return
+		for entry in REGISTERED_TOOL_SPECS:
+			if entry.get("module") == module and entry.get("name") == name:
+				if description:
+					entry.setdefault("description", description)
+				if parameters is not None:
+					entry["parameters"] = parameters
+				if returns is not None:
+					entry["returns"] = returns
+				return
 	_TOOL_KEYS.add(key)
-	REGISTERED_TOOL_SPECS.append({"name": name, "description": description, "module": module})
+	record = {"name": name, "description": description, "module": module}
+	if parameters is not None:
+		record["parameters"] = parameters
+	if returns is not None:
+		record["returns"] = returns
+	REGISTERED_TOOL_SPECS.append(record)
 
 
 def _iter_tool_modules() -> list[ModuleType]:
@@ -67,8 +93,20 @@ def register_db_tools(mcp: object) -> None:
 		return {"status": "ok", "applied": applied}
 
 	# Register metadata for discovery
-	_register_tool_meta("db_health", "Database health check", __name__)
-	_register_tool_meta("db_migrate", "Apply pending SQL migrations", __name__)
+	_register_tool_meta(
+		"db_health",
+		"Database health check",
+		__name__,
+		parameters=_extract_parameters(db_health),
+		returns="dict",
+	)
+	_register_tool_meta(
+		"db_migrate",
+		"Apply pending SQL migrations",
+		__name__,
+		parameters=_extract_parameters(db_migrate),
+		returns="dict",
+	)
 
 
 def get_registered_tool_specs() -> list[dict]:
@@ -87,7 +125,10 @@ def discover_tool_specs_via_dummy() -> list[dict]:
 		def tool(self, *args, **kwargs):  # parity with FastMCP signature
 			def decorator(fn):
 				desc = (fn.__doc__ or "").strip()
-				_register_tool_meta(fn.__name__, desc, fn.__module__)
+				params = _extract_parameters(fn)
+				ret = fn.__annotations__.get("return") if hasattr(fn, "__annotations__") else None
+				rtype = getattr(ret, "__name__", None) if ret not in (None, inspect._empty) else None
+				_register_tool_meta(fn.__name__, desc, fn.__module__, parameters=params, returns=rtype)
 				return fn
 			return decorator
 
@@ -119,5 +160,3 @@ def invoke_tool_via_dummy(tool_name: str, **kwargs):
 	if not fn:
 		raise ValueError(f"Tool not found: {tool_name}")
 	return fn, kwargs
-
-

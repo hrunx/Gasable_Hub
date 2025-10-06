@@ -35,7 +35,8 @@ def connect(dbname_override: str | None = None):
 	if dsn:
 		return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.DictCursor)
 	info = get_connection_params()
-	return psycopg2.connect(
+	sslmode = os.getenv("PG_SSLMODE") or None
+	conn_kwargs = dict(
 		host=info.host,
 		port=info.port,
 		user=info.user,
@@ -43,6 +44,9 @@ def connect(dbname_override: str | None = None):
 		database=dbname_override or info.dbname,
 		cursor_factory=psycopg2.extras.DictCursor,
 	)
+	if sslmode:
+		conn_kwargs["sslmode"] = sslmode
+	return psycopg2.connect(**conn_kwargs)
 
 
 def run_sql(sql: str) -> None:
@@ -97,5 +101,4 @@ def health_check() -> dict:
 		return {"status": "ok"}
 	except Exception as e:
 		return {"status": "error", "error": str(e)}
-
 

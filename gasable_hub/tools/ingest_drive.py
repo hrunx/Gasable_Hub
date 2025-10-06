@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from mcp.server.fastmcp import Context
+try:
+	from mcp.server.fastmcp import Context  # type: ignore
+except Exception:  # pragma: no cover
+	class Context:  # type: ignore
+		pass
 
 
 async def ingest_drive(folder_id: str, ctx: Context) -> dict:
