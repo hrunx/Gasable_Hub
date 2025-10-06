@@ -1,17 +1,35 @@
-node_modules
-.next
-out
-.venv
-venv
-__pycache__
+# Node / Next.js
+node_modules/
+.next/
+out/
+**/.next/cache
+
+# Python
+.venv/
+__pycache__/
 *.pyc
-.env
-.env.local
-logs
-storage
-.git
-.gitignore
+
+# Logs & local data
+logs/
 *.log
-uvicorn.out
-uvicorn_*.out
+storage/
+exports/
+
+# VCS
+.git/
+.gitignore
+
+# OS/editor
 .DS_Store
+.idea/
+.vscode/
+
+# Build outputs
+build/
+dist/
+
+# Service account and secrets (not needed in image)
+.env
+service_acc(gasablehub).json
+client_secret*.json
+google_oauth*.json

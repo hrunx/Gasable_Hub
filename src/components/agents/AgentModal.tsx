@@ -12,6 +12,13 @@ import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { X } from "lucide-react";
 
+interface RagSettings {
+  rerank: boolean;
+  expansions: number;
+  k_dense_fuse: number;
+  mmr_lambda: number;
+}
+
 interface AgentModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -24,6 +31,8 @@ interface AgentModalProps {
     answer_model?: string;
     rerank_model?: string;
     top_k?: number;
+    rag_settings?: RagSettings;
+    api_key?: string;
   } | null;
 }
 
@@ -38,14 +47,14 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
     answer_model: agent?.answer_model || "gpt-5",
     rerank_model: agent?.rerank_model || "gpt-5-mini",
     top_k: agent?.top_k || 12,
-    rag_settings: (agent as any)?.rag_settings || {
+    rag_settings: agent?.rag_settings || {
       rerank: true,
       expansions: 1,
       k_dense_fuse: 8,
       mmr_lambda: 0.6,
     },
   });
-  const [apiKey, setApiKey] = useState<string | undefined>(agent ? (agent as { api_key?: string }).api_key : undefined);
+  const [apiKey, setApiKey] = useState<string | undefined>(agent?.api_key);
 
   const [selectedTools, setSelectedTools] = useState<string[]>(
     agent?.tool_allowlist || []
@@ -63,7 +72,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
         answer_model: agent?.answer_model || "gpt-5",
         rerank_model: agent?.rerank_model || "gpt-5-mini",
         top_k: agent?.top_k || 12,
-        rag_settings: (agent as any)?.rag_settings || {
+        rag_settings: agent?.rag_settings || {
           rerank: true,
           expansions: 1,
           k_dense_fuse: 8,
@@ -71,7 +80,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
         },
       });
       setSelectedTools(agent?.tool_allowlist || []);
-      setApiKey(agent ? (agent as { api_key?: string }).api_key : undefined);
+      setApiKey(agent?.api_key);
     }
   }, [agent, open]);
 

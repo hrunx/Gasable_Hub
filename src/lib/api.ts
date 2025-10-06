@@ -3,6 +3,13 @@ const API_BASE = typeof window !== 'undefined' && window.location.hostname !== '
   ? '' // Empty string uses same origin in production
   : "http://localhost:8000";
 
+interface RagSettings {
+  rerank?: boolean;
+  expansions?: number;
+  k_dense_fuse?: number;
+  mmr_lambda?: number;
+}
+
 interface Agent {
   id: string;
   display_name: string;
@@ -13,6 +20,8 @@ interface Agent {
   rerank_model?: string;
   top_k?: number;
   assistant_id?: string;
+  api_key?: string;
+  rag_settings?: RagSettings;
 }
 
 interface Workflow {
