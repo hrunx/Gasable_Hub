@@ -54,6 +54,51 @@ def register(mcp):
             return {"status": "error", "error": str(e)}
 `
   },
+  {
+    id: "supabase_db_read",
+    name: "Supabase: Database Read",
+    description: "Run a read-only SQL query on a Supabase Postgres database.",
+    fields: [
+      { key: "SUPABASE_DB_URL", label: "Database URL", placeholder: "postgresql://..." },
+      { key: "SUPABASE_SERVICE_ROLE", label: "Service Role (optional)", placeholder: "service_role_key" },
+      { key: "SQL", label: "SQL (default)", placeholder: "SELECT 1" },
+    ],
+    code: (args) => `from __future__ import annotations
+
+import os
+import psycopg2
+import psycopg2.extras
+try:
+    from mcp.server.fastmcp import Context  # type: ignore
+except Exception:
+    class Context:  # type: ignore
+        pass
+
+def register(mcp):
+    @mcp.tool()
+    def supabase_db_read(sql: str | None = None, ctx: Context | None = None) -> dict:
+        """Execute a read-only SQL query against Supabase Postgres and return rows.
+
+        Args:
+          sql: SQL to execute (SELECT only). If omitted, defaults to provided template.
+        """
+        url = os.getenv("SUPABASE_DB_URL", "").strip() or "${args.SUPABASE_DB_URL or ''}"
+        if not url:
+            return {"status": "error", "error": "SUPABASE_DB_URL is required"}
+        q = (sql or "${(args.SQL or 'SELECT 1').replace('`','').replace('\\n',' ')}").strip()
+        if not q.lower().startswith("select"):
+            return {"status": "error", "error": "Only read-only SELECT queries are allowed"}
+        try:
+            conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.DictCursor)
+            with conn.cursor() as cur:
+                cur.execute(q)
+                rows = [dict(r) for r in cur.fetchall()]
+            conn.close()
+            return {"status": "ok", "rows": rows}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+`
+  },
 ];
 
 export function ToolModal({ open, onOpenChange, tool }: ToolModalProps) {
@@ -78,6 +123,12 @@ export function ToolModal({ open, onOpenChange, tool }: ToolModalProps) {
       setTemplateValues({});
     }
   }, [open, tool]);
+
+  useEffect(() => {
+    // Heuristic: if name/description mentions supabase, switch template
+    const s = `${name} ${description}`.toLowerCase();
+    if (s.includes("supabase")) setSelectedTemplate("supabase_db_read");
+  }, [name, description]);
 
   const createTool = useMutation({
     mutationFn: async () => {

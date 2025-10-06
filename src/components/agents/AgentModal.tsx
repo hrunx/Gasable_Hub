@@ -145,7 +145,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl w-[880px] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {agent ? "Edit Agent" : "Create New Agent"}
@@ -209,6 +209,24 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
               rows={6}
               required
             />
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  const txt = formData.system_prompt || "";
+                  if (!txt.trim()) return;
+                  try {
+                    const { rewritten } = await api.rewritePrompt(txt);
+                    setFormData({ ...formData, system_prompt: rewritten || txt });
+                  } catch (_) {}
+                }}
+              >
+                Improve with AI
+              </Button>
+              <p className="text-xs text-gray-500">AI will rewrite the prompt for clarity and safety.</p>
+            </div>
             <p className="text-xs text-gray-500">
               Define the agent&apos;s role, behavior, and capabilities
             </p>

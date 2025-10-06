@@ -141,6 +141,7 @@ export default function Home() {
             <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="tools">Tools</TabsTrigger>
             <TabsTrigger value="workflows">Workflows</TabsTrigger>
+            <TabsTrigger value="orchestrator">Orchestrator</TabsTrigger>
           </TabsList>
 
           <TabsContent value="chat" className="space-y-4">
@@ -358,6 +359,47 @@ export default function Home() {
                 ))
               )}
             </div>
+          </TabsContent>
+
+          <TabsContent value="orchestrator" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Orchestrator Settings</CardTitle>
+                <p className="text-xs text-gray-500">Control routing rules and the orchestrator system prompt used for agent selection.</p>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">System Prompt</label>
+                  <textarea
+                    className="w-full border rounded p-2 text-sm h-32"
+                    defaultValue={(orchestratorData as any)?.system_prompt || ""}
+                    onBlur={async (e) => {
+                      const sp = e.target.value;
+                      await api.setOrchestrator({ system_prompt: sp, rules: (orchestratorData as any)?.rules || {} });
+                      refetchOrch();
+                    }}
+                  />
+                  <p className="text-xs text-gray-500">The instruction the orchestrator uses to decide which agent should handle a task.</p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Routing Keywords (JSON)</label>
+                  <textarea
+                    className="w-full border rounded p-2 text-sm h-40 font-mono"
+                    defaultValue={JSON.stringify(((orchestratorData as any)?.rules || {}), null, 2)}
+                    onBlur={async (e) => {
+                      try {
+                        const rules = JSON.parse(e.target.value || "{}");
+                        await api.setOrchestrator({ system_prompt: (orchestratorData as any)?.system_prompt || "", rules });
+                        refetchOrch();
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                  />
+                  <p className="text-xs text-gray-500">Simple keyword map to guide routing (e.g., {"procurement": ["order", "buy"], ...}).</p>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
 

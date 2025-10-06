@@ -8,13 +8,13 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/gasable-hub:latest']
   
-  # Deploy to Cloud Run
+  # Deploy to Cloud Run (existing service name)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'run'
       - 'deploy'
-      - 'gasable-hub'
+      - 'chart-gasable-hub-3644'
       - '--image'
       - 'gcr.io/$PROJECT_ID/gasable-hub:latest'
       - '--region'
@@ -22,12 +22,18 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
-      - '--memory'
-      - '2Gi'
+      - '--port'
+      - '8080'
       - '--cpu'
-      - '2'
+      - '8'
+      - '--memory'
+      - '32Gi'
       - '--timeout'
       - '300'
+      - '--execution-environment'
+      - 'gen2'
+      - '--update-env-vars'
+      - 'STATIC_ROOT=/app/static'
       - '--quiet'
 
 images:
@@ -35,5 +41,7 @@ images:
 
 options:
   machineType: 'N1_HIGHCPU_8'
+  logging: 'CLOUD_LOGGING_ONLY'
+  defaultLogsBucketBehavior: 'REGIONAL_USER_OWNED_BUCKET'
 
 timeout: '1200s'

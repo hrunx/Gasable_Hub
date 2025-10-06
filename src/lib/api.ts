@@ -39,6 +39,22 @@ export const api = {
     return res.json();
   },
 
+  async getOrchestrator() {
+    const res = await fetch(`${API_BASE}/api/orchestrator`);
+    if (!res.ok) throw new Error("Failed to fetch orchestrator config");
+    return res.json();
+  },
+
+  async setOrchestrator(cfg: { system_prompt: string; rules?: Record<string, unknown> }) {
+    const res = await fetch(`${API_BASE}/api/orchestrator`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    if (!res.ok) throw new Error("Failed to save orchestrator config");
+    return res.json();
+  },
+
   async saveAgent(agent: Agent) {
     const res = await fetch(`${API_BASE}/api/agents`, {
       method: "POST",
@@ -46,6 +62,16 @@ export const api = {
       body: JSON.stringify(agent),
     });
     if (!res.ok) throw new Error("Failed to save agent");
+    return res.json();
+  },
+
+  async rewritePrompt(text: string) {
+    const res = await fetch(`${API_BASE}/api/prompt_rewrite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error("Failed to rewrite prompt");
     return res.json();
   },
 

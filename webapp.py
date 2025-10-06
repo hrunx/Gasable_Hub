@@ -1782,6 +1782,38 @@ async def api_agents_list():
     }
 
 
+@app.get("/api/orchestrator")
+async def api_orchestrator_get():
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("select system_prompt, rules from public.gasable_orchestrator where id='default'")
+            row = cur.fetchone()
+    if not row:
+        return {"system_prompt": "", "rules": {}}
+    return {"system_prompt": row[0] or "", "rules": row[1] or {}}
+
+
+class OrchestratorUpdate(BaseModel):
+    system_prompt: str
+    rules: dict | None = None
+
+
+@app.post("/api/orchestrator")
+async def api_orchestrator_set(cfg: OrchestratorUpdate):
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into public.gasable_orchestrator (id, system_prompt, rules)
+                values ('default', %s, %s)
+                on conflict (id) do update set system_prompt=excluded.system_prompt, rules=excluded.rules, updated_at=now()
+                """,
+                (cfg.system_prompt, cfg.rules or {}),
+            )
+            conn.commit()
+    return {"status": "ok"}
+
+
 @app.post("/api/agents")
 async def api_agents_upsert(a: AgentUpsert):
     with get_pg_conn() as conn:
@@ -1869,6 +1901,41 @@ async def api_agent_direct_chat(agent_id: str, payload: DirectAgentIn, request: 
     final = next((m for m in msgs.data if m.role == "assistant"), None)
     text = final.content[0].text.value if (final and final.content) else ""
     return {"message": text, "status": r.status}
+
+
+class PromptRewriteIn(BaseModel):
+    text: str
+
+
+@app.post("/api/prompt_rewrite")
+async def api_prompt_rewrite(inp: PromptRewriteIn):
+    """Rewrite a freeform instruction into a crisp, safe system prompt.
+
+    Returns the rewritten text. If LLM is unavailable, echoes input.
+    """
+    txt = (inp.text or "").strip()
+    if not txt:
+        return {"rewritten": ""}
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        prompt = (
+            "Rewrite the following agent instruction into a crisp, actionable, "
+            "safety-aware system prompt for an assistant. Keep the user's original intent; "
+            "improve clarity and structure; avoid meta-commentary; use imperative voice. "
+            "Return only the rewritten prompt.\n\n" + txt
+        )
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+            temperature=0,
+            messages=[
+                {"role": "system", "content": "You rewrite prompts precisely, concisely, and safely."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        out = (resp.choices[0].message.content or txt).strip()
+        return {"rewritten": out}
+    except Exception:
+        return {"rewritten": txt}
 
 
 @app.post("/api/assistants/provision")
