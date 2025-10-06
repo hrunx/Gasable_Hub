@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import Link from "next/link";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { AgentModal } from "@/components/agents/AgentModal";
-import { ToolModal } from "@/components/agents/ToolModal";
+import ToolModal from "@/components/agents/ToolModal";
 
 export default function Home() {
   const router = useRouter();
@@ -378,10 +378,10 @@ export default function Home() {
                   <label className="text-sm font-medium">System Prompt</label>
                   <textarea
                     className="w-full border rounded p-2 text-sm h-32"
-                    defaultValue={(orchestratorData as any)?.system_prompt || ""}
+                    defaultValue={(orchestratorData?.system_prompt as string) || ""}
                     onBlur={async (e) => {
                       const sp = e.target.value;
-                      await api.setOrchestrator({ system_prompt: sp, rules: (orchestratorData as any)?.rules || {} });
+                      await api.setOrchestrator({ system_prompt: sp, rules: (orchestratorData?.rules as Record<string, unknown>) || {} });
                       refetchOrch();
                     }}
                   />
@@ -391,11 +391,11 @@ export default function Home() {
                   <label className="text-sm font-medium">Routing Keywords (JSON)</label>
                   <textarea
                     className="w-full border rounded p-2 text-sm h-40 font-mono"
-                    defaultValue={JSON.stringify(((orchestratorData as any)?.rules || {}), null, 2)}
+                    defaultValue={JSON.stringify(((orchestratorData?.rules as Record<string, unknown>) || {}), null, 2)}
                     onBlur={async (e) => {
                       try {
                         const rules = JSON.parse(e.target.value || "{}");
-                        await api.setOrchestrator({ system_prompt: (orchestratorData as any)?.system_prompt || "", rules });
+                        await api.setOrchestrator({ system_prompt: (orchestratorData?.system_prompt as string) || "", rules });
                         refetchOrch();
                       } catch {
                         // ignore
@@ -403,7 +403,7 @@ export default function Home() {
                     }}
                   />
                   <p className="text-xs text-gray-500">
-                    Simple keyword map to guide routing (e.g., {"{"}"procurement": ["order", "buy"], ...{"}"}).
+                    Simple keyword map to guide routing (e.g., {'{'}&quot;procurement&quot;: [&quot;order&quot;, &quot;buy&quot;], ...{'}'}).
                   </p>
                 </div>
               </CardContent>

@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { X } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 interface RagSettings {
   rerank: boolean;
@@ -38,6 +39,7 @@ interface AgentModalProps {
 
 export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [formData, setFormData] = useState({
     id: agent?.id || "",
     display_name: agent?.display_name || "",
@@ -96,7 +98,12 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
     mutationFn: api.saveAgent,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
+      toast({ title: agent ? "Agent updated" : "Agent created", description: formData.display_name });
       onOpenChange(false);
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ title: "Failed to save agent", description: msg, variant: "destructive" });
     },
   });
 
@@ -109,7 +116,8 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
           .toLowerCase()
           .trim()
           .replace(/[^a-z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "");
+          .replace(/^_+|_+$/g, "") ||
+        `agent_${Math.random().toString(36).slice(2, 8)}`;
 
     saveAgent.mutate(
       {
@@ -127,6 +135,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
           try {
             await api.syncAssistants();
             queryClient.invalidateQueries({ queryKey: ["agents"] });
+            toast({ title: "Assistants synced", description: "OpenAI assistants were updated" });
           } catch {
             // Best-effort: ignore sync failure in UI
           }

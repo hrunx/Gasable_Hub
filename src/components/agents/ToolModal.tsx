@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-// import { api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 
 interface ToolModalProps {
   open: boolean;
@@ -103,6 +104,7 @@ def register(mcp):
 
 export function ToolModal({ open, onOpenChange, tool }: ToolModalProps) {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [mode, setMode] = useState<"view" | "catalog" | "ai">(tool ? "view" : "catalog");
   const [name, setName] = useState(tool?.name || "");
   const [description, setDescription] = useState(tool?.description || "");
@@ -132,25 +134,24 @@ export function ToolModal({ open, onOpenChange, tool }: ToolModalProps) {
 
   const createTool = useMutation({
     mutationFn: async () => {
-      const body = {
-        name,
-        description,
-        module,
-        code: code || (selected ? selected.code(templateValues) : ""),
+      const payload = {
+        name: name.trim(),
+        description: description.trim(),
+        module: module.trim() || "gasable_hub.tools",
+        code: (code || (selected ? selected.code(templateValues) : "")).trim(),
       };
-      if (!body.name || !body.code) throw new Error("Name and code are required");
-      const res = await fetch("/api/mcp_tools", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error("Failed to create tool");
-      return res.json();
+      if (!payload.name || !payload.code) throw new Error("Name and code are required");
+      return api.createTool(payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tools"] });
+      toast({ title: "Tool created", description: `${name} is ready to use` });
       onOpenChange(false);
-    }
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ title: "Failed to create tool", description: msg, variant: "destructive" });
+    },
   });
 
   return (
@@ -251,3 +252,4 @@ export function ToolModal({ open, onOpenChange, tool }: ToolModalProps) {
 }
 
 
+export default ToolModal;

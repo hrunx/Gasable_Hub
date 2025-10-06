@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Send, Bot, User, Loader2, Sparkles } from "lucide-react";
+import { api } from "@/lib/api";
 
 interface Message {
   role: "user" | "assistant" | "system";
@@ -63,30 +64,18 @@ export function ChatInterface({
       let data;
 
       if (selectedAgent === null) {
-        // Multi-Agent Mode: Use orchestrator to route to appropriate agent
-        response = await fetch("/api/orchestrate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: "demo_user",
-            message: messageContent,
-            namespace: "global",
-          }),
+        data = await api.orchestrate({
+          user_id: "demo_user",
+          message: messageContent,
+          namespace: "global",
         });
-        data = await response.json();
       } else {
-        // Direct Agent Mode: Chat directly with selected agent
-        response = await fetch("/api/orchestrate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: "demo_user",
-            message: messageContent,
-            namespace: "global",
-            agent_preference: selectedAgent, // Force specific agent
-          }),
+        data = await api.orchestrate({
+          user_id: "demo_user",
+          message: messageContent,
+          namespace: "global",
+          agent_preference: selectedAgent,
         });
-        data = await response.json();
       }
 
       const assistantMessage: Message = {

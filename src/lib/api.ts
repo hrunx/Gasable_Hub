@@ -1,7 +1,10 @@
-// Use relative URL in production, localhost in development
-const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
-  ? '' // Empty string uses same origin in production
-  : "http://localhost:8000";
+// Use relative URL in production, localhost in development (supports 127.0.0.1)
+const API_BASE = (() => {
+  if (typeof window === 'undefined') return "http://localhost:8000";
+  const host = (window.location && window.location.hostname) || '';
+  const isLocal = host === 'localhost' || host === '127.0.0.1';
+  return isLocal ? "http://localhost:8000" : '';
+})();
 
 interface RagSettings {
   rerank?: boolean;
@@ -114,6 +117,16 @@ export const api = {
     return res.json();
   },
 
+  async createTool(tool: { name: string; description?: string; module?: string; code: string }) {
+    const res = await fetch(`${API_BASE}/api/mcp_tools`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(tool),
+    });
+    if (!res.ok) throw new Error("Failed to create tool");
+    return res.json();
+  },
+
   // Status
   async getStatus() {
     const res = await fetch(`${API_BASE}/api/status`);
@@ -125,6 +138,17 @@ export const api = {
   async getConnections() {
     const res = await fetch(`${API_BASE}/api/connections`);
     if (!res.ok) throw new Error("Failed to fetch connections");
+    return res.json();
+  },
+
+  // Orchestrator
+  async orchestrate(body: { user_id: string; message: string; namespace?: string; agent_preference?: string | null }) {
+    const res = await fetch(`${API_BASE}/api/orchestrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error("Failed to orchestrate");
     return res.json();
   },
 };
