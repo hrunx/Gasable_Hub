@@ -34,5 +34,5 @@ PY
 
 echo "Starting FastAPI backend on ${BACKEND_PORT}..."
 cd /app
-exec python -m uvicorn webapp:app --host 0.0.0.0 --port ${BACKEND_PORT} --workers 2
+exec python -m uvicorn webapp:app --host 0.0.0.0 --port ${BACKEND_PORT} --workers 1
 

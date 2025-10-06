@@ -42,7 +42,12 @@ from openai import OpenAI
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Mount static only if directory exists to avoid runtime errors on Cloud Run
+try:
+	if os.path.isdir("static"):
+		app.mount("/static", StaticFiles(directory="static"), name="static")
+except Exception:
+	pass
 
 # Load local environment variables for development parity
 load_dotenv(override=True)

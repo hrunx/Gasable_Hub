@@ -41,6 +41,7 @@ COPY --from=frontend-builder /usr/local/lib/node_modules /usr/local/lib/node_mod
 COPY --from=frontend-builder /app/.next/standalone ./
 COPY --from=frontend-builder /app/.next/static ./.next/static
 COPY --from=frontend-builder /app/public ./public
+COPY static ./static
 
 # Create necessary directories
 RUN mkdir -p logs storage
