@@ -1,0 +1,40 @@
+{
+  "name": "openai.embeddings",
+  "version": "1.0.0",
+  "title": "Create Embeddings",
+  "category": "OpenAI",
+  "auth": {
+    "type": "token",
+    "provider": "openai"
+  },
+  "inputs": {
+    "model": {
+      "type": "string",
+      "required": true,
+      "default": "text-embedding-3-large"
+    },
+    "input": {
+      "type": "array",
+      "required": true
+    }
+  },
+  "outputs": {
+    "response": {
+      "type": "object"
+    }
+  },
+  "rate_limit": {
+    "unit": "minute",
+    "limit": 500
+  },
+  "retries": {
+    "max": 5,
+    "backoff": "exponential",
+    "max_delay_sec": 30
+  },
+  "impl": {
+    "type": "python",
+    "module": "gasable_nodes.plugins.openai.embeddings",
+    "function": "run"
+  }
+}

@@ -55,30 +55,52 @@ async function main() {
     const batchSize = 200;
     const iterable = startIndex > 0 ? arr.slice(startIndex) : arr;
     for await (const batch of chunkArray(iterable, batchSize)) {
-      const rows = [];
+      const withEmb = [];
+      const withoutEmb = [];
       for (const obj of batch) {
         const node_id = obj.node_id;
         const text = obj.text ?? null;
-        const emb = padVector((obj.embedding || []).map(Number), embedDim);
+        const hasEmb = Array.isArray(obj.embedding) && obj.embedding.length > 0;
         const meta = obj.li_metadata || {};
-        rows.push([node_id, text, toPgvectorText(emb), JSON.stringify(meta)]);
+        if (hasEmb) {
+          const emb = padVector((obj.embedding || []).map(Number), embedDim);
+          withEmb.push([node_id, text, toPgvectorText(emb), JSON.stringify(meta)]);
+        } else {
+          // Insert text + metadata only; leave embedding columns NULL for backfill
+          withoutEmb.push([node_id, text, JSON.stringify(meta)]);
+        }
         count++;
         if (limit && count >= limit) break;
       }
-      if (!rows.length) continue;
-      const valuesSql = rows
-        .map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}::vector, $${i * 4 + 4}::jsonb)`)
-        .join(",");
-      const flatParams = rows.flat();
-      const sql = `
-        INSERT INTO public.gasable_index (node_id, text, ${embedCol}, li_metadata)
-        VALUES ${valuesSql}
-        ON CONFLICT (node_id) DO UPDATE SET
-          text = EXCLUDED.text,
-          ${embedCol} = EXCLUDED.${embedCol},
-          li_metadata = COALESCE(public.gasable_index.li_metadata, '{}'::jsonb) || COALESCE(EXCLUDED.li_metadata, '{}'::jsonb)
-      `;
-      await client.query(sql, flatParams);
+      if (withEmb.length) {
+        const valuesSql = withEmb
+          .map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}::vector, $${i * 4 + 4}::jsonb)`) 
+          .join(",");
+        const flatParams = withEmb.flat();
+        const sql = `
+          INSERT INTO public.gasable_index (node_id, text, ${embedCol}, li_metadata)
+          VALUES ${valuesSql}
+          ON CONFLICT (node_id) DO UPDATE SET
+            text = EXCLUDED.text,
+            ${embedCol} = EXCLUDED.${embedCol},
+            li_metadata = COALESCE(public.gasable_index.li_metadata, '{}'::jsonb) || COALESCE(EXCLUDED.li_metadata, '{}'::jsonb)
+        `;
+        await client.query(sql, flatParams);
+      }
+      if (withoutEmb.length) {
+        const valuesSql2 = withoutEmb
+          .map((_, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3}::jsonb)`) 
+          .join(",");
+        const flatParams2 = withoutEmb.flat();
+        const sql2 = `
+          INSERT INTO public.gasable_index (node_id, text, li_metadata)
+          VALUES ${valuesSql2}
+          ON CONFLICT (node_id) DO UPDATE SET
+            text = EXCLUDED.text,
+            li_metadata = COALESCE(public.gasable_index.li_metadata, '{}'::jsonb) || COALESCE(EXCLUDED.li_metadata, '{}'::jsonb)
+        `;
+        await client.query(sql2, flatParams2);
+      }
       if (limit && count >= limit) break;
     }
     const { rows: [{ cnt }] } = await client.query("SELECT COUNT(*)::int AS cnt FROM public.gasable_index");

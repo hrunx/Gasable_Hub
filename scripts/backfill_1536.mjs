@@ -3,7 +3,6 @@
 //   OPENAI_API_KEY=... DATABASE_URL=... PGSSLMODE=require \
 //   node scripts/backfill_1536.mjs --limit 500 --batches 40
 
-import OpenAI from 'openai';
 import { Client } from 'pg';
 
 const EMBED_MODEL = process.env.EMBED_MODEL || 'text-embedding-3-small';
@@ -40,11 +39,25 @@ async function fetchBatch(pg, limit) {
   return rows.map(r => ({ id: r.node_id, text: String(r.txt || '') }));
 }
 
-async function embedBatch(openai, texts) {
+async function embedBatch(texts) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not set');
   const payload = { model: EMBED_MODEL, input: texts };
   if (Number.isFinite(EMBED_DIM)) payload.dimensions = EMBED_DIM;
-  const e = await openai.embeddings.create(payload);
-  return e.data.map(d => d.embedding);
+  const res = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`embed error ${res.status}: ${txt}`);
+  }
+  const e = await res.json();
+  return (e.data || []).map(d => d.embedding);
 }
 
 async function updateBatch(pg, ids, vecs) {
@@ -68,7 +81,6 @@ async function updateBatch(pg, ids, vecs) {
 
 async function main() {
   const { limit, batches } = parseArgs();
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const pg = await getPg();
   let total = 0;
   for (let b = 0; b < batches; b++) {
@@ -76,7 +88,7 @@ async function main() {
     if (!batch.length) { console.log('done: no more rows'); break; }
     const texts = batch.map(r => r.text.slice(0, 8000));
     const ids = batch.map(r => r.id);
-    const vecs = await embedBatch(openai, texts);
+    const vecs = await embedBatch(texts);
     const updated = await updateBatch(pg, ids, vecs);
     total += updated;
     console.log(`batch ${b+1}/${batches}: updated ${updated} (total ${total})`);

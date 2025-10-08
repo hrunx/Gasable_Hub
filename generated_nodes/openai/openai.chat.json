@@ -1,0 +1,46 @@
+{
+  "name": "openai.chat",
+  "version": "1.0.0",
+  "title": "Chat Completion",
+  "category": "OpenAI",
+  "auth": {
+    "type": "token",
+    "provider": "openai"
+  },
+  "inputs": {
+    "model": {
+      "type": "string",
+      "required": true,
+      "default": "gpt-5-mini"
+    },
+    "messages": {
+      "type": "array",
+      "required": true,
+      "description": "[{role, content}]"
+    },
+    "temperature": {
+      "type": "number",
+      "required": false,
+      "default": 0
+    }
+  },
+  "outputs": {
+    "response": {
+      "type": "object"
+    }
+  },
+  "rate_limit": {
+    "unit": "minute",
+    "limit": 500
+  },
+  "retries": {
+    "max": 5,
+    "backoff": "exponential",
+    "max_delay_sec": 30
+  },
+  "impl": {
+    "type": "python",
+    "module": "gasable_nodes.plugins.openai.chat",
+    "function": "run"
+  }
+}

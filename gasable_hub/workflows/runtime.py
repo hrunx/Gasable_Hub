@@ -6,6 +6,18 @@ from collections import defaultdict, deque
 from typing import Any, Dict, Iterable
 
 from ..tools import invoke_tool_via_dummy
+from ..db.postgres import connect
+
+# Optional node runtime imports; guarded to keep this module importable in all envs
+try:  # pragma: no cover - defensive import
+    from gasable_nodes.registry import get_node as get_registered_node
+    from gasable_nodes.schema import NodeSpec as _NodeSpec
+    from gasable_nodes.runtime import run_node as _run_node, Context as _NodeContext
+except Exception:  # pragma: no cover - best-effort fallback when nodes package unavailable
+    get_registered_node = None  # type: ignore[assignment]
+    _NodeSpec = None  # type: ignore[assignment]
+    _run_node = None  # type: ignore[assignment]
+    _NodeContext = None  # type: ignore[assignment]
 
 _PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
 
@@ -83,7 +95,97 @@ async def _execute_tool_node(node: dict, state: dict, ctx: dict | None) -> Any:
     tool_name = node.get("tool")
     if not tool_name:
         raise WorkflowExecutionError(f"Tool node '{node.get('id')}' is missing 'tool'")
+
     tool_inputs = _coerce_tool_inputs(node, state, ctx)
+
+    # First, attempt to execute via the Gasable node registry if available
+    if get_registered_node and _NodeSpec and _run_node and _NodeContext:
+        try:
+            spec_json = get_registered_node(tool_name)
+        except Exception:
+            spec_json = None
+        if isinstance(spec_json, dict):
+            # Build credential resolver that reads from DB secrets and env
+            async def _cred_resolver(provider: str | None, credential_id: str | None):  # type: ignore[name-defined]
+                # Load all portal secrets once per resolve
+                secrets_map: dict[str, str] = {}
+                try:
+                    with connect() as _conn:
+                        with _conn.cursor() as _cur:
+                            _cur.execute("select name, value from public.portal_secrets")
+                            for n, v in _cur.fetchall():
+                                if isinstance(n, str) and isinstance(v, str):
+                                    secrets_map[n] = v
+                except Exception:
+                    pass
+
+                # Provider-specific mapping to expected fields
+                prov = (provider or "").lower()
+                # Prefer explicit access_token if present, otherwise api_key
+                if prov in ("openai",):
+                    val = secrets_map.get("OPENAI_API_KEY") or secrets_map.get("OPENAI_TOKEN") or os.getenv("OPENAI_API_KEY")
+                    return {"api_key": val} if val else {}
+                if prov in ("notion",):
+                    val = secrets_map.get("NOTION_API_KEY") or os.getenv("NOTION_API_KEY")
+                    return {"api_key": val} if val else {}
+                if "google" in prov or prov in ("gmail", "google_sheets", "sheets"):
+                    # Expect an access token (short-lived) or a generic API key fallback
+                    at = secrets_map.get("GOOGLE_ACCESS_TOKEN") or os.getenv("GOOGLE_ACCESS_TOKEN")
+                    if at:
+                        return {"access_token": at}
+                    ak = secrets_map.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                    return {"api_key": ak} if ak else {}
+                # Generic fallbacks
+                gen_at = secrets_map.get("ACCESS_TOKEN") or os.getenv("ACCESS_TOKEN")
+                if gen_at:
+                    return {"access_token": gen_at}
+                gen_key = secrets_map.get("API_KEY") or os.getenv("API_KEY")
+                return {"api_key": gen_key} if gen_key else {}
+
+            # Execute via node runtime
+            import os  # local import to avoid polluting module scope
+            import httpx
+
+            spec = _NodeSpec(**spec_json)
+            async with httpx.AsyncClient(timeout=60) as http:
+                node_ctx = _NodeContext(http=http, logger=print, cred_resolver=_cred_resolver)
+                result = await _run_node(spec, tool_inputs, state, node_ctx)
+                return result
+
+        # If not found in registry, execute via a generic catalog proxy spec so every node runs
+        # This ensures imported templates are immediately runnable even without specific implementations
+        import httpx
+        # Heuristic: normalize tool name to leaf.leaf
+        leaf = (tool_name or "node").split(".")[-1].lower()
+        for suf in ("trigger", "workflow"):
+            if leaf.endswith(suf):
+                leaf = leaf[: -len(suf)]
+                break
+        import re as _re
+        leaf = _re.sub(r"[^a-z0-9_]+", "_", leaf) or "node"
+        synthetic_spec = {
+            "name": f"{leaf}.{leaf}",
+            "version": "1.0.0",
+            "title": tool_name,
+            "category": "Catalog",
+            "doc": None,
+            "auth": {"type": "none", "provider": None, "scopes": []},
+            "inputs": {},
+            "outputs": {"response": {"type": "object"}},
+            "rate_limit": {"unit": "minute", "limit": 60},
+            "retries": {"max": 3, "backoff": "exponential", "max_delay_sec": 30},
+            "impl": {"type": "python", "module": "gasable_nodes.plugins.catalog.proxy", "function": "run"},
+        }
+        spec = _NodeSpec(**synthetic_spec)
+        async with httpx.AsyncClient(timeout=60) as http:
+            # Cred resolver is not used for proxy (auth none), provide a no-op
+            async def _noop_resolver(provider, credential_id):
+                return {}
+            node_ctx = _NodeContext(http=http, logger=print, cred_resolver=_noop_resolver)
+            result = await _run_node(spec, tool_inputs, state, node_ctx)
+            return result
+
+    # Fallback to MCP tool invocation (legacy tools path)
     fn, kwargs = invoke_tool_via_dummy(tool_name, **tool_inputs)
     result = fn(**kwargs)
     if asyncio.iscoroutine(result):
@@ -134,12 +236,38 @@ async def execute_workflow(graph: dict, inputs: dict | None = None, *, ctx: dict
     for node_id in order:
         node = nodes[node_id]
         node_type = (node.get("type") or "tool").lower()
+        
+        # Normalize UI node types to execution types
+        # Skip pure UI nodes (start, decision, agent)
+        if node_type in ("startnode", "start"):
+            # Start nodes are just UI markers, skip execution
+            _register_node_output(state, node_id, {"status": "started"})
+            continue
+        if node_type in ("toolnode",):
+            # toolNode from UI -> treat as tool execution
+            node_type = "tool"
+        if node_type in ("agentnode",):
+            # agentNode -> treat as tool execution (agent is just a special tool)
+            node_type = "tool"
+        if node_type in ("decisionnode",):
+            # decisionNode -> treat as mapper
+            node_type = "mapper"
+        
+        # Execute based on normalized type
         if node_type == "input":
             payload = node.get("defaults") or {}
             merged = {**payload, **(inputs or {})}
             _register_node_output(state, node_id, merged)
             continue
         if node_type == "tool":
+            # Get tool name from node data or direct property
+            if not node.get("tool"):
+                # Try to extract from data.toolName
+                data = node.get("data", {})
+                tool_name = data.get("toolName") if isinstance(data, dict) else None
+                if tool_name:
+                    node = {**node, "tool": tool_name}
+            
             result = await _execute_tool_node(node, state, ctx)
             _register_node_output(state, node_id, result)
             continue

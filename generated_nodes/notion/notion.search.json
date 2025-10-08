@@ -1,0 +1,39 @@
+{
+  "name": "notion.search",
+  "version": "1.0.0",
+  "title": "Search pages and databases",
+  "category": "Notion",
+  "doc": "",
+  "auth": {
+    "type": "oauth2",
+    "provider": "notion",
+    "scopes": []
+  },
+  "inputs": {
+    "body": {
+      "type": "object",
+      "required": false,
+      "description": "JSON body"
+    }
+  },
+  "outputs": {
+    "response": {
+      "type": "object"
+    }
+  },
+  "rate_limit": {
+    "unit": "minute",
+    "limit": 60
+  },
+  "retries": {
+    "max": 5,
+    "backoff": "exponential",
+    "max_delay_sec": 30
+  },
+  "impl": {
+    "type": "http",
+    "openapi_provider": "notion",
+    "operation_id": "search",
+    "base_url": "https://api.notion.com/v1"
+  }
+}

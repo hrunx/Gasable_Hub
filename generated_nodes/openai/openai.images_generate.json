@@ -1,0 +1,40 @@
+{
+  "name": "openai.images_generate",
+  "version": "1.0.0",
+  "title": "Generate Image",
+  "category": "OpenAI",
+  "auth": {
+    "type": "token",
+    "provider": "openai"
+  },
+  "inputs": {
+    "model": {
+      "type": "string",
+      "required": false,
+      "default": "gpt-image-1"
+    },
+    "prompt": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "outputs": {
+    "response": {
+      "type": "object"
+    }
+  },
+  "rate_limit": {
+    "unit": "minute",
+    "limit": 500
+  },
+  "retries": {
+    "max": 5,
+    "backoff": "exponential",
+    "max_delay_sec": 30
+  },
+  "impl": {
+    "type": "python",
+    "module": "gasable_nodes.plugins.openai.images",
+    "function": "run"
+  }
+}

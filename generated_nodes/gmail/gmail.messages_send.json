@@ -1,0 +1,44 @@
+{
+  "name": "gmail.messages_send",
+  "version": "1.0.0",
+  "title": "Send message",
+  "category": "Gmail",
+  "doc": "",
+  "auth": {
+    "type": "oauth2",
+    "provider": "gmail",
+    "scopes": []
+  },
+  "inputs": {
+    "userId": {
+      "type": "string",
+      "required": true,
+      "description": ""
+    },
+    "body": {
+      "type": "object",
+      "required": false,
+      "description": "JSON body"
+    }
+  },
+  "outputs": {
+    "response": {
+      "type": "object"
+    }
+  },
+  "rate_limit": {
+    "unit": "minute",
+    "limit": 60
+  },
+  "retries": {
+    "max": 5,
+    "backoff": "exponential",
+    "max_delay_sec": 30
+  },
+  "impl": {
+    "type": "http",
+    "openapi_provider": "gmail",
+    "operation_id": "messages_send",
+    "base_url": "https://gmail.googleapis.com/gmail/v1"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "google_sheets.spreadsheets_values_get",
+  "version": "1.0.0",
+  "title": "Get values",
+  "category": "Google Sheets",
+  "doc": "",
+  "auth": {
+    "type": "oauth2",
+    "provider": "google_sheets",
+    "scopes": []
+  },
+  "inputs": {
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": ""
+    },
+    "range": {
+      "type": "string",
+      "required": true,
+      "description": ""
+    }
+  },
+  "outputs": {
+    "response": {
+      "type": "object"
+    }
+  },
+  "rate_limit": {
+    "unit": "minute",
+    "limit": 60
+  },
+  "retries": {
+    "max": 5,
+    "backoff": "exponential",
+    "max_delay_sec": 30
+  },
+  "impl": {
+    "type": "http",
+    "openapi_provider": "google_sheets",
+    "operation_id": "spreadsheets_values_get",
+    "base_url": "https://sheets.googleapis.com/v4"
+  }
+}

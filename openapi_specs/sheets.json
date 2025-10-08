@@ -1,0 +1,19 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "google_sheets", "version": "v4" },
+  "servers": [ { "url": "https://sheets.googleapis.com/v4" } ],
+  "paths": {
+    "/spreadsheets/{spreadsheetId}/values/{range}": {
+      "get": {
+        "operationId": "spreadsheets_values_get",
+        "summary": "Get values",
+        "parameters": [
+          { "name": "spreadsheetId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "range", "in": "path", "required": true, "schema": { "type": "string" } }
+        ]
+      }
+    }
+  }
+}
+
+

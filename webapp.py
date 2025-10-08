@@ -9,7 +9,8 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 from openai import OpenAI
 import psycopg2
-from psycopg2 import sql
+from psycopg2 import sql, Error as PGError
+import psycopg2.extras as pgx
 from rank_bm25 import BM25Okapi
 import json
 import re
@@ -18,6 +19,8 @@ import html
 import asyncio
 from gasable_hub.tools import discover_tool_specs_via_dummy
 from gasable_hub.tools import invoke_tool_via_dummy
+import copy
+from textwrap import dedent
 
 from gasable_hub.ingestion.gdrive import (
     authenticate_google_drive,
@@ -39,15 +42,118 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from gasable_hub.agents.boot import ensure_assistants, _mcp_tool
 from gasable_hub.workflows import WorkflowExecutionError, execute_workflow
+from hub.api_nodes import router as nodes_router
+from hub.api_templates import router as templates_router
 from gasable_hub.tools import discover_tool_specs_via_dummy
 from pydantic import BaseModel
+from collections import deque
+from urllib.parse import urlparse
 
 
 logger = logging.getLogger("gasable_hub.webapp")
 
 
 app = FastAPI()
+# Routers for Nodes/Templates
+app.include_router(nodes_router)
+app.include_router(templates_router)
 templates = Jinja2Templates(directory="templates")
+# In-memory ring buffer of recent server errors (non-persistent)
+RECENT_ERRORS: deque[dict] = deque(maxlen=500)
+
+# Enable explicit CORS for local development and UI direct-calls to the API
+try:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ],
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=True,
+    )
+except Exception:
+    # CORS should never crash startup; safe to ignore in restricted environments
+    pass
+
+
+@app.middleware("http")
+async def _error_capture_middleware(request: Request, call_next):
+    try:
+        response = await call_next(request)
+        try:
+            if int(getattr(response, "status_code", 200)) >= 500:
+                RECENT_ERRORS.append({
+                    "status": int(getattr(response, "status_code", 500)),
+                    "method": request.method,
+                    "path": request.url.path,
+                    "ts": time.time(),
+                })
+        except Exception:
+            pass
+        return response
+    except Exception as exc:
+        try:
+            RECENT_ERRORS.append({
+                "status": 500,
+                "method": request.method,
+                "path": request.url.path,
+                "error": str(exc),
+                "ts": time.time(),
+            })
+        except Exception:
+            pass
+        raise
+
+# In-memory error log buffer for recent server errors
+from collections import deque
+import time as _time
+
+_RECENT_ERRORS: deque[dict] = deque(maxlen=500)
+
+
+def _record_error(event: dict) -> None:
+    try:
+        event.setdefault("ts", _time.time())
+        _RECENT_ERRORS.append(event)
+    except Exception:
+        # Never crash on logging
+        pass
+
+
+@app.middleware("http")
+async def _capture_server_errors(request: Request, call_next):
+    try:
+        response = await call_next(request)
+    except Exception as exc:  # Unhandled exceptions
+        import traceback as _tb
+        _record_error(
+            {
+                "path": request.url.path,
+                "method": request.method,
+                "status": 500,
+                "error": str(exc),
+                "trace": "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))[:10000],
+            }
+        )
+        logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
+        raise
+    else:
+        # Capture explicit 5xx responses produced by handlers
+        try:
+            if getattr(response, "status_code", 200) >= 500:
+                _record_error(
+                    {
+                        "path": request.url.path,
+                        "method": request.method,
+                        "status": int(response.status_code),
+                        "error": "server_error",
+                    }
+                )
+        except Exception:
+            pass
+        return response
 
 
 def _resolve_static_root() -> Path:
@@ -71,6 +177,336 @@ except Exception:
 # Load local environment variables for development parity
 load_dotenv(override=True)
 
+# Local fallback seeds keep the API responsive when Postgres is unavailable.
+_DEFAULT_AGENT_SEED: list[dict] = [
+    {
+        "id": "support",
+        "display_name": "Support Agent",
+        "namespace": "global",
+        "system_prompt": dedent(
+            """
+            You are Gasable Customer Care support assistant.
+
+            Your Primary Role:
+            - Answer questions using ONLY the context retrieved from the knowledge base
+            - Be helpful, concise, and professional
+            - Always use rag_search_tool to search the knowledge base before answering
+
+            How to Answer:
+            1. For ANY question about Gasable services, products, or company information, use rag_search_tool first
+            2. Answer based ONLY on the retrieved context from the knowledge base
+            3. If no relevant information is found, say: "I don't have specific information about that in our knowledge base. Let me help you with what I do know, or you can contact our team directly."
+            4. Cite sources when available
+            5. Be direct and helpful
+
+            What You Should Do:
+            - Search the knowledge base using rag_search_tool for every query
+            - Provide accurate information from the retrieved context
+            - List services, products, and features when asked
+            - Be customer-focused and helpful
+            - Give specific details from the knowledge base
+
+            What You Should NOT Do:
+            - Ask users to verify their identity for general information questions
+            - Make up information not in the retrieved context
+            - Refuse to answer questions about company services and products
+            - Request authentication for public information
+            """
+        ).strip(),
+        "tool_allowlist": ["rag_search_tool"],
+        "answer_model": "gpt-4o-mini",
+        "rerank_model": "gpt-4o-mini",
+        "top_k": 12,
+        "rag_settings": {"rerank": True, "expansions": 1},
+    },
+    {
+        "id": "procurement",
+        "display_name": "Procurement Agent",
+        "namespace": "global",
+        "system_prompt": dedent(
+            """
+            You are the Gasable procurement specialist.
+            - Validate product, quantity, user, and address details before placing any order.
+            - Use rag_search_tool to confirm product availability or policy constraints.
+            - When confident, call orders_place and return the resulting invoice summary.
+            - Flag risky or ambiguous requests and ask clarifying questions.
+            """
+        ).strip(),
+        "tool_allowlist": ["rag_search_tool", "orders_place"],
+        "answer_model": "gpt-4o-mini",
+        "rerank_model": "gpt-4o-mini",
+        "top_k": 12,
+        "rag_settings": {"rerank": True, "expansions": 1},
+    },
+    {
+        "id": "research",
+        "display_name": "Research Agent",
+        "namespace": "global",
+        "system_prompt": dedent(
+            """
+            You are a professional research assistant. Your role is to:
+            1. Conduct thorough web searches on any topic requested
+            2. Analyze documents and extract key insights
+            3. Synthesize information from multiple sources
+            4. Provide well-structured research reports with citations
+            5. Identify trends, patterns, and actionable recommendations
+
+            When researching:
+            - Start broad, then dive into specifics with follow-up searches
+            - Use ingest_web or ingest_local_tool to capture relevant sources when needed
+            - Summarize findings with bullet points and short paragraphs
+            - Highlight uncertainties or conflicting data
+            """
+        ).strip(),
+        "tool_allowlist": ["rag_search_tool", "ingest_web", "ingest_local_tool", "ingest_drive_tool"],
+        "answer_model": "gpt-4o",
+        "rerank_model": "gpt-4o-mini",
+        "top_k": 15,
+        "rag_settings": {"rerank": True, "expansions": 1, "mmr_lambda": 0.6},
+    },
+    {
+        "id": "marketing",
+        "display_name": "Marketing Agent",
+        "namespace": "global",
+        "system_prompt": dedent(
+            """
+            You are a senior marketing specialist.
+            - Draft compelling outreach emails and campaign assets.
+            - Tailor tone, language, and CTA to the requested audience.
+            - Suggest segmentation ideas and campaign experiments.
+            - When structured leads are provided, personalize the messaging.
+            """
+        ).strip(),
+        "tool_allowlist": ["compose_email", "extract_suppliers", "rag_search_tool"],
+        "answer_model": "gpt-4o",
+        "rerank_model": "gpt-4o-mini",
+        "top_k": 12,
+        "rag_settings": {"rerank": True, "expansions": 1},
+    },
+]
+
+_DEFAULT_WORKFLOW_SEED: list[dict] = [
+    {
+        "id": "support_triage",
+        "display_name": "Support Ticket Triage",
+        "namespace": "global",
+        "description": "Route customer questions through RAG search and draft a grounded reply.",
+        "graph": {
+            "nodes": [
+                {
+                    "id": "inbox",
+                    "type": "input",
+                    "position": {"x": 160, "y": 40},
+                    "data": {"label": "Customer Question"},
+                },
+                {
+                    "id": "rag",
+                    "type": "tool",
+                    "position": {"x": 160, "y": 200},
+                    "data": {
+                        "label": "Search Knowledge Base",
+                        "toolName": "rag_search_tool",
+                        "description": "Run hybrid RAG search across curated knowledge.",
+                        "required_keys": ["OPENAI_API_KEY"],
+                    },
+                },
+                {
+                    "id": "reply",
+                    "type": "output",
+                    "position": {"x": 160, "y": 360},
+                    "data": {"label": "Draft Support Reply"},
+                },
+            ],
+            "edges": [
+                {"id": "inbox->rag", "source": "inbox", "target": "rag"},
+                {"id": "rag->reply", "source": "rag", "target": "reply"},
+            ],
+        },
+    },
+    {
+        "id": "procurement_order_flow",
+        "display_name": "Procurement Order Flow",
+        "namespace": "global",
+        "description": "Validate order requests, confirm catalog details, and place purchases.",
+        "graph": {
+            "nodes": [
+                {
+                    "id": "request",
+                    "type": "input",
+                    "position": {"x": 80, "y": 40},
+                    "data": {"label": "Order Request"},
+                },
+                {
+                    "id": "catalog",
+                    "type": "tool",
+                    "position": {"x": 80, "y": 200},
+                    "data": {
+                        "label": "Catalog Lookup",
+                        "toolName": "rag_search_tool",
+                        "description": "Verify product specs and stock before ordering.",
+                        "required_keys": ["OPENAI_API_KEY"],
+                    },
+                },
+                {
+                    "id": "place",
+                    "type": "tool",
+                    "position": {"x": 80, "y": 360},
+                    "data": {
+                        "label": "Place Order",
+                        "toolName": "orders_place",
+                        "description": "Submit purchase to the Gasable marketplace sandbox.",
+                        "required_keys": ["GASABLE_API_KEY", "GASABLE_API_BASE"],
+                    },
+                },
+                {
+                    "id": "summary",
+                    "type": "output",
+                    "position": {"x": 80, "y": 520},
+                    "data": {"label": "Invoice Summary"},
+                },
+            ],
+            "edges": [
+                {"id": "request->catalog", "source": "request", "target": "catalog"},
+                {"id": "catalog->place", "source": "catalog", "target": "place"},
+                {"id": "place->summary", "source": "place", "target": "summary"},
+            ],
+        },
+    },
+    {
+        "id": "marketing_campaign_brief",
+        "display_name": "Marketing Campaign Brief",
+        "namespace": "global",
+        "description": "Draft a personalized outreach email for a campaign brief.",
+        "graph": {
+            "nodes": [
+                {
+                    "id": "brief",
+                    "type": "input",
+                    "position": {"x": 300, "y": 40},
+                    "data": {"label": "Campaign Brief"},
+                },
+                {
+                    "id": "leads",
+                    "type": "tool",
+                    "position": {"x": 140, "y": 200},
+                    "data": {
+                        "label": "Extract Leads",
+                        "toolName": "extract_suppliers",
+                        "description": "Parse uploaded research or notes for potential leads.",
+                        "required_keys": ["OPENAI_API_KEY"],
+                    },
+                },
+                {
+                    "id": "compose",
+                    "type": "tool",
+                    "position": {"x": 300, "y": 360},
+                    "data": {
+                        "label": "Compose Email",
+                        "toolName": "compose_email",
+                        "description": "Draft a tailored outreach email with campaign call-to-action.",
+                        "required_keys": ["OPENAI_API_KEY"],
+                    },
+                },
+                {
+                    "id": "review",
+                    "type": "output",
+                    "position": {"x": 300, "y": 520},
+                    "data": {"label": "Marketing Draft"},
+                },
+            ],
+            "edges": [
+                {"id": "brief->leads", "source": "brief", "target": "leads"},
+                {"id": "leads->compose", "source": "leads", "target": "compose"},
+                {"id": "brief->compose", "source": "brief", "target": "compose"},
+                {"id": "compose->review", "source": "compose", "target": "review"},
+            ],
+        },
+    },
+]
+
+
+def _fallback_agents(namespace: str | None = None) -> list[dict]:
+    out: list[dict] = []
+    for seed in _DEFAULT_AGENT_SEED:
+        if namespace and namespace not in ("*", seed.get("namespace", "global")):
+            continue
+        out.append(
+            {
+                "id": seed["id"],
+                "display_name": seed["display_name"],
+                "namespace": seed.get("namespace", "global"),
+                "system_prompt": seed["system_prompt"],
+                "tool_allowlist": list(seed.get("tool_allowlist", [])),
+                "answer_model": seed.get("answer_model") or os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+                "rerank_model": seed.get("rerank_model") or os.getenv("RERANK_MODEL", "gpt-5-mini"),
+                "top_k": int(seed.get("top_k", 12)),
+                "assistant_id": None,
+                "api_key": None,
+                "rag_settings": copy.deepcopy(seed.get("rag_settings") or {}),
+            }
+        )
+    return out
+
+
+def _fallback_workflows(namespace: str = "global", limit: int | None = None, offset: int = 0) -> list[dict]:
+    items = [
+        copy.deepcopy(seed)
+        for seed in _DEFAULT_WORKFLOW_SEED
+        if namespace in ("*", "", seed.get("namespace", "global"))
+    ]
+    offset = max(0, int(offset or 0))
+    if limit is not None:
+        limit = max(1, int(limit))
+        return items[offset : offset + limit]
+    return items[offset:]
+
+
+def _workflow_tools_metadata(graph: dict) -> tuple[list[str], dict[str, dict]]:
+    tools: list[str] = []
+    details: dict[str, dict] = {}
+    nodes = graph.get("nodes") if isinstance(graph, dict) else []
+    if isinstance(nodes, list):
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            data = node.get("data") if isinstance(node.get("data"), dict) else {}
+            tool_name = data.get("toolName") or node.get("tool")
+            if isinstance(tool_name, str) and tool_name.strip():
+                tname = tool_name.strip()
+                tools.append(tname)
+                desc = (
+                    data.get("description")
+                    or node.get("tool_description")
+                    or node.get("description")
+                )
+                required = data.get("required_keys") or node.get("required_keys") or []
+                if not isinstance(required, list):
+                    required = []
+                details.setdefault(tname, {"description": None, "required_keys": []})
+                if desc:
+                    details[tname]["description"] = str(desc)
+                if required:
+                    details[tname]["required_keys"] = [str(x) for x in required if x]
+    ordered = sorted(list({*tools}))[:20]
+    return ordered, {k: details.get(k, {"description": None, "required_keys": []}) for k in ordered}
+
+
+def _serialize_workflow_entry(item: dict) -> dict:
+    graph = copy.deepcopy(item.get("graph") or {})
+    description = item.get("description") or ""
+    if not description:
+        description = _summarize_workflow_graph(graph)
+    tools, tool_details = _workflow_tools_metadata(graph)
+    return {
+        "id": item["id"],
+        "display_name": item["display_name"],
+        "namespace": item.get("namespace", "global"),
+        "graph": graph,
+        "description": description,
+        "tools": tools,
+        "tool_details": tool_details,
+    }
+
 # Provision assistants on boot if requested (no-op if already created)
 
 
@@ -90,16 +526,24 @@ async def _maybe_bootstrap_assistants() -> None:
 
     asyncio.create_task(_run())
 
-# CORS for external chatbot/frontends
-_cors_env = os.getenv("CORS_ORIGINS", "*").strip()
-if _cors_env == "*":
+# CORS for frontends (allow localhost dev by default)
+_cors_env = (os.getenv("CORS_ORIGINS") or "http://localhost:3000,http://127.0.0.1:3000,https://localhost:3000,https://127.0.0.1:3000,https://*.netlify.app,https://*.vercel.app,*").strip()
+origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+# Preserve order while de-duplicating
+origins = list(dict.fromkeys(origins))
+allow_credentials = True
+if not origins:
     origins = ["*"]
-else:
-    origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+    allow_credentials = False
+elif "*" in origins:
+    origins = [o for o in origins if o != "*"]
+    if not origins:
+        origins = ["*"]
+        allow_credentials = False
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -132,25 +576,375 @@ def _default_embed_model() -> str:
 
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Interpret common truthy strings from environment variables."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "t", "yes", "y", "on")
+
+
+def _apply_default_sslmode(dsn: str) -> str:
+    """Append sslmode when appropriate so managed hosts stay secure."""
+    dsn = (dsn or "").strip()
+    if not dsn or "sslmode" in dsn.lower():
+        return dsn
+    sslmode_env = (os.getenv("PG_SSLMODE") or "").strip()
+    if sslmode_env:
+        delimiter = "&" if "?" in dsn else "?"
+        return f"{dsn}{delimiter}sslmode={sslmode_env}"
+    require_ssl = _env_flag("PG_REQUIRE_SSL", default=False)
+    host = ""
+    try:
+        host = (urlparse(dsn).hostname or "").lower()
+    except Exception:
+        host = ""
+    if not require_ssl:
+        if host and host not in ("localhost", "127.0.0.1", "::1"):
+            require_ssl = True
+    if require_ssl:
+        delimiter = "&" if "?" in dsn else "?"
+        return f"{dsn}{delimiter}sslmode=require"
+    return dsn
+
+
+def _pg_connection_candidates():
+    """Yield Postgres connection configurations in priority order."""
+    host = (os.getenv("PG_HOST") or "localhost").strip() or "localhost"
+    port_raw = os.getenv("PG_PORT", "5432")
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 5432
+    user = (os.getenv("PG_USER") or os.getenv("USER") or "postgres").strip() or "postgres"
+    password = os.getenv("PG_PASSWORD") or ""
+    database = (os.getenv("PG_DBNAME") or "gasable_db").strip() or "gasable_db"
+    params = {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "database": database,
+    }
+    sslmode_env = (os.getenv("PG_SSLMODE") or "").strip()
+    if sslmode_env:
+        params["sslmode"] = sslmode_env
+    elif _env_flag("PG_REQUIRE_SSL", default=False) and host not in ("localhost", "127.0.0.1", "::1"):
+        params["sslmode"] = "require"
+
+    seen: set[str] = set()
+    prefer_local = _env_flag("PG_PREFER_LOCAL", default=False)
+    prefer_url = _env_flag("PG_PREFER_URL", default=False)
+
+    if prefer_local:
+        yield ("params", params, "PG_HOST")
+
+    for key in ("DATABASE_URL", "SUPABASE_DB_URL", "NETLIFY_DATABASE_URL"):
+        raw = (os.getenv(key) or "").strip()
+        if not raw:
+            continue
+        dsn = _apply_default_sslmode(raw)
+        if dsn in seen:
+            continue
+        seen.add(dsn)
+        yield ("dsn", dsn, key)
+
+    if not prefer_local and not prefer_url:
+        yield ("params", params, "PG_HOST")
+
+
 def get_pg_conn():
-    # Prefer full DSN if provided (e.g., Supabase / Neon / Netlify)
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or os.getenv("NETLIFY_DATABASE_URL")
-    if dsn:
-        # Ensure SSL for managed Postgres (e.g., Supabase) unless explicitly disabled
-        if "sslmode" not in dsn:
-            if "?" in dsn:
-                dsn = dsn + "&sslmode=require"
-            else:
-                dsn = dsn + "?sslmode=require"
-        return psycopg2.connect(dsn)
-    # Fallback to discrete params
-    return psycopg2.connect(
-        host=os.getenv("PG_HOST", "localhost"),
-        port=int(os.getenv("PG_PORT", "5432")),
-        user=os.getenv("PG_USER", os.getenv("USER", "postgres")),
-        password=os.getenv("PG_PASSWORD", ""),
-        database=os.getenv("PG_DBNAME", "gasable_db"),
+    """Connect to Postgres, gracefully falling back between DSN and discrete env vars."""
+    errors: list[Exception] = []
+    for kind, cfg, source in _pg_connection_candidates():
+        try:
+            if kind == "dsn":
+                return psycopg2.connect(cfg)
+            return psycopg2.connect(**cfg)
+        except psycopg2.OperationalError as exc:
+            errors.append(exc)
+            logger.warning("Postgres connection failed via %s: %s", source, exc)
+        except Exception as exc:
+            errors.append(exc)
+            logger.exception("Unexpected Postgres connection failure via %s", source)
+    if errors:
+        raise errors[-1]
+    raise RuntimeError("No Postgres connection configuration available")
+
+def _ensure_secrets_table(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS public.portal_secrets (
+          name text PRIMARY KEY,
+          value text NOT NULL,
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+        """
     )
+
+
+def _ensure_agents_table(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS public.gasable_agents (
+          id             text PRIMARY KEY,
+          display_name   text NOT NULL,
+          namespace      text NOT NULL DEFAULT 'global',
+          system_prompt  text NOT NULL,
+          tool_allowlist text[] NOT NULL DEFAULT '{}',
+          answer_model   text NOT NULL DEFAULT 'gpt-5-mini',
+          rerank_model   text NOT NULL DEFAULT 'gpt-5-mini',
+          top_k          int  NOT NULL DEFAULT 12,
+          assistant_id   text,
+          api_key        text,
+          rag_settings   jsonb NOT NULL DEFAULT '{}'::jsonb,
+          created_at     timestamptz NOT NULL DEFAULT now(),
+          updated_at     timestamptz NOT NULL DEFAULT now()
+        )
+        """
+    )
+    # Backfill columns that may be missing on older deployments
+    try:
+        cur.execute("ALTER TABLE public.gasable_agents ADD COLUMN IF NOT EXISTS namespace text NOT NULL DEFAULT 'global'")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE public.gasable_agents ADD COLUMN IF NOT EXISTS api_key text")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE public.gasable_agents ADD COLUMN IF NOT EXISTS rag_settings jsonb NOT NULL DEFAULT '{}'::jsonb")
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS gasable_agents_api_key_idx ON public.gasable_agents (api_key) WHERE api_key IS NOT NULL")
+    except Exception:
+        pass
+
+def _get_mcp_api_token() -> str | None:
+    """Return MCP API token from DB if present; fallback to env; then API.md."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_secrets_table(cur)
+                cur.execute("SELECT value FROM public.portal_secrets WHERE name='API_TOKEN'")
+                row = cur.fetchone()
+                if row and row[0]:
+                    return str(row[0])
+    except Exception:
+        pass
+    tok = (os.getenv("API_TOKEN") or "").strip()
+    if tok:
+        return tok
+    # Best-effort: parse from API.md if present (development convenience)
+    try:
+        md_path = Path(__file__).resolve().parent / "API.md"
+        if not md_path.exists():
+            md_path = Path("API.md")
+        if md_path.exists():
+            content = md_path.read_text(encoding="utf-8")
+            import re as _re
+            m = _re.search(r"API_TOKEN=\s*`([^`]+)`", content)
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        pass
+    return None
+
+
+def _set_mcp_api_token(new_value: str) -> None:
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            _ensure_secrets_table(cur)
+            cur.execute(
+                """
+                INSERT INTO public.portal_secrets (name, value)
+                VALUES ('API_TOKEN', %s)
+                ON CONFLICT (name) DO UPDATE SET value=EXCLUDED.value, updated_at=now()
+                """,
+                (new_value,),
+            )
+            conn.commit()
+
+
+def _get_portal_secrets(names: list[str] | None = None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_secrets_table(cur)
+                if names:
+                    cur.execute(
+                        "select name, value from public.portal_secrets where name = ANY(%s)",
+                        (names,),
+                    )
+                else:
+                    cur.execute("select name, value from public.portal_secrets")
+                for n, v in cur.fetchall():
+                    out[str(n)] = str(v)
+    except Exception:
+        pass
+    return out
+
+
+@app.get("/api/secrets")
+async def api_secrets_list(names: str | None = None):
+    selected: list[str] | None = None
+    if names:
+        try:
+            selected = [s.strip() for s in names.split(",") if s.strip()]
+        except Exception:
+            selected = None
+    data = _get_portal_secrets(selected)
+    return {"secrets": [{"name": k, "has_value": bool(v)} for k, v in data.items()]}
+
+
+class SecretSetIn(BaseModel):
+    name: str
+    value: str
+
+
+@app.post("/api/secrets")
+async def api_secrets_set(inp: SecretSetIn):
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_secrets_table(cur)
+                cur.execute(
+                    """
+                    INSERT INTO public.portal_secrets (name, value)
+                    VALUES (%s, %s)
+                    ON CONFLICT (name) DO UPDATE SET value=EXCLUDED.value, updated_at=now()
+                    """,
+                    (inp.name, inp.value),
+                )
+                conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+def _ensure_mcp_tools_table(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS public.mcp_tools (
+          name text PRIMARY KEY,
+          description text,
+          module text,
+          code text NOT NULL,
+          required_keys jsonb NOT NULL DEFAULT '[]'::jsonb,
+          api_key text,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )
+        """
+    )
+    # Ensure columns exist on older deployments
+    try:
+        cur.execute("ALTER TABLE public.mcp_tools ADD COLUMN IF NOT EXISTS api_key text")
+    except Exception:
+        pass
+
+
+@app.get("/api/recent_errors")
+async def api_recent_errors(limit: int = 100):
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except Exception:
+        limit = 100
+    items = list(RECENT_ERRORS)[-limit:]
+    # newest first
+    items.reverse()
+    return {"items": items}
+
+
+def _load_orchestrator_cfg() -> tuple[str, dict]:
+    """Return (system_prompt, rules) for orchestrator."""
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            # Ensure table exists before selecting
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS public.gasable_orchestrator (
+                  id text primary key,
+                  system_prompt text not null,
+                  rules jsonb not null default '{}'::jsonb,
+                  updated_at timestamptz not null default now()
+                )
+                """
+            )
+            cur.execute("select system_prompt, rules from public.gasable_orchestrator where id='default'")
+            row = cur.fetchone()
+    if not row:
+        return ("", {})
+    return (row[0] or "", row[1] or {})
+
+
+def _choose_agent_with_rules(message: str, agent_preference: str | None = None) -> tuple[str, dict]:
+    """Choose agent using DB-configured keywords rules; fallback to heuristic/LLM.
+
+    Returns (agent_id, meta) where meta contains scoring and method.
+    """
+    if agent_preference:
+        return agent_preference, {"method": "preference"}
+
+    msg = (message or "").lower().strip()
+    sys_prompt, rules = _load_orchestrator_cfg()
+    kw_map = {}
+    try:
+        kw_map = dict((rules or {}).get("keywords", {}) or {})
+    except Exception:
+        kw_map = {}
+
+    # Score by keyword matches per agent id
+    scores: dict[str, int] = {}
+    for agent_id, words in kw_map.items():
+        try:
+            arr = [str(w).lower() for w in (words or [])]
+        except Exception:
+            arr = []
+        score = sum(1 for w in arr if w and w in msg)
+        if score:
+            scores[agent_id] = score
+
+    if scores:
+        # pick highest score; deterministic tie-break by id
+        best = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        return best, {"method": "keywords", "scores": scores}
+
+    # Fallback to heuristic
+    heuristic = _route_intent(message)
+
+    # Optional: LLM tie-breaker when configured
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select id from public.gasable_agents order by id")
+                ids = [r[0] for r in cur.fetchall()]
+        if ids:
+            sys = (sys_prompt or "You decide the best agent for the user's request.")
+            prompt = (
+                "Agents: " + ", ".join(ids) + "\n" +
+                "Message: " + message + "\n" +
+                "Return ONLY the agent id."
+            )
+            resp = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+                messages=[
+                    {"role": "system", "content": sys},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+            )
+            choice = (resp.choices[0].message.content or heuristic or ids[0]).strip()
+            choice = choice.split()[0].strip().strip(".,")
+            if choice in ids:
+                return choice, {"method": "llm", "fallback": heuristic}
+    except Exception:
+        pass
+
+    return heuristic, {"method": "heuristic"}
+
 
 
 
@@ -1192,6 +1986,19 @@ class ToolSpec(BaseModel):
     description: str | None = None
     module: str
     code: str  # raw python module content for the tool
+    required_keys: list[str] | None = None
+
+
+class ToolUpdate(BaseModel):
+    name: str
+    description: str | None = None
+    module: str
+    code: str
+    required_keys: list[str] | None = None
+
+
+class ToolDraftIn(BaseModel):
+    description: str
 
 
 @app.post("/api/mcp_tools")
@@ -1220,6 +2027,25 @@ async def api_mcp_tools_create(spec: ToolSpec):
         initf = tools_dir / "__init__.py"
         if not initf.exists():
             initf.write_text("# tools package\n", encoding="utf-8")
+        # Persist to DB for catalog
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                cur.execute(
+                    """
+                    INSERT INTO public.mcp_tools (name, description, module, code, required_keys, created_at, updated_at)
+                    VALUES (%s,%s,%s,%s,%s, now(), now())
+                    ON CONFLICT (name) DO UPDATE SET
+                      description=EXCLUDED.description,
+                      module=EXCLUDED.module,
+                      code=EXCLUDED.code,
+                      required_keys=EXCLUDED.required_keys,
+                      updated_at=now()
+                    """,
+                    (spec.name, spec.description or "", spec.module, spec.code, json.dumps(spec.required_keys or [])),
+                )
+                conn.commit()
+
         # Re-discover
         specs = discover_tool_specs_via_dummy()
         return {"status": "ok", "written": str(target), "tools": specs}
@@ -1235,7 +2061,7 @@ async def api_mcp_invoke(payload: dict, request: Request):
     Auth: optional bearer token via env API_TOKEN; if set, requests must include
           Authorization: Bearer <token>
     """
-    token = os.getenv("API_TOKEN")
+    token = _get_mcp_api_token()
     if not token:
         return JSONResponse({"error": "MCP invoke disabled (API_TOKEN not set)"}, status_code=403)
     auth_header = request.headers.get("Authorization", "")
@@ -1260,6 +2086,336 @@ async def api_mcp_invoke(payload: dict, request: Request):
         return {"status": "ok", "result": result}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/keys")
+async def api_keys_list():
+    # Agents' API keys
+    agents: list[dict] = []
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select id, api_key from public.gasable_agents order by id")
+                rows = cur.fetchall()
+                # Auto-generate missing agent API keys for convenience (MVP)
+                import secrets as _secrets
+                need: list[str] = [r[0] for r in rows if not r[1]]
+                if need:
+                    for aid in need:
+                        cur.execute("update public.gasable_agents set api_key=%s, updated_at=now() where id=%s", (_secrets.token_urlsafe(40), aid))
+                    conn.commit()
+                    cur.execute("select id, api_key from public.gasable_agents order by id")
+                    rows = cur.fetchall()
+                agents = [{"id": r[0], "api_key": r[1]} for r in rows]
+    except Exception:
+        agents = []
+    # Tools' API keys
+    tools: list[dict] = []
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                cur.execute("select name, api_key from public.mcp_tools order by name")
+                trows = cur.fetchall()
+                # Auto-generate missing tool API keys (MVP)
+                import secrets as _secrets2
+                tneed: list[str] = [r[0] for r in trows if not r[1]]
+                if tneed:
+                    for nm in tneed:
+                        cur.execute(
+                            """
+                            INSERT INTO public.mcp_tools (name, api_key, code)
+                            VALUES (%s, %s, COALESCE((SELECT code FROM public.mcp_tools WHERE name=%s),'') )
+                            ON CONFLICT (name) DO UPDATE SET api_key=EXCLUDED.api_key, updated_at=now()
+                            """,
+                            (nm, _secrets2.token_urlsafe(40), nm),
+                        )
+                    conn.commit()
+                    cur.execute("select name, api_key from public.mcp_tools order by name")
+                    trows = cur.fetchall()
+                tools = [{"name": r[0], "api_key": r[1]} for r in trows]
+    except Exception:
+        tools = []
+
+    # MCP token (from DB/env/API.md)
+    mcp_token = _get_mcp_api_token()
+    return {
+        "agents": agents,
+        "mcp_token": mcp_token or None,
+        "tools": tools,
+    }
+
+
+@app.post("/api/tools/{tool_name}/rotate_key")
+async def api_tools_rotate_key(tool_name: str):
+    import secrets
+    new_key = secrets.token_urlsafe(40)
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                cur.execute(
+                    """
+                    INSERT INTO public.mcp_tools (name, api_key, code)
+                    VALUES (%s, %s, COALESCE((SELECT code FROM public.mcp_tools WHERE name=%s), ''))
+                    ON CONFLICT (name) DO UPDATE SET api_key=EXCLUDED.api_key, updated_at=now()
+                    """,
+                    (tool_name, new_key, tool_name),
+                )
+                conn.commit()
+        return {"status": "ok", "api_key": new_key}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/keys/mcp_token/rotate")
+async def api_keys_rotate_mcp_token():
+    import secrets
+    new = secrets.token_urlsafe(40)
+    try:
+        _set_mcp_api_token(new)
+        return {"status": "ok", "mcp_token": new}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/mcp_tools_db")
+async def api_mcp_tools_db_list():
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                cur.execute(
+                    """
+                    SELECT name, description, module, required_keys, api_key, updated_at
+                    FROM public.mcp_tools
+                    ORDER BY name
+                    """
+                )
+                rows = cur.fetchall()
+        return {"tools": [
+            {"name": r[0], "description": r[1], "module": r[2], "required_keys": r[3] or [], "api_key": r[4], "updated_at": r[5].isoformat() if r[5] else None}
+            for r in rows
+        ]}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/mcp_tools_db/{name}")
+async def api_mcp_tools_db_get(name: str):
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                cur.execute("SELECT name, description, module, code, required_keys, api_key, updated_at FROM public.mcp_tools WHERE name=%s", (name,))
+                r = cur.fetchone()
+        if not r:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"name": r[0], "description": r[1], "module": r[2], "code": r[3], "required_keys": r[4] or [], "api_key": r[5], "updated_at": r[6].isoformat() if r[6] else None}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/mcp_tools_db/update")
+async def api_mcp_tools_db_update(tu: ToolUpdate):
+    try:
+        tools_dir = Path(__file__).resolve().parent / "gasable_hub" / "tools"
+        if not tools_dir.exists():
+            tools_dir = Path("gasable_hub/tools")
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in tu.name.lower())
+        target = tools_dir / f"{safe_name}.py"
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(tu.code)
+
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                cur.execute(
+                    """
+                    INSERT INTO public.mcp_tools (name, description, module, code, required_keys, updated_at)
+                    VALUES (%s,%s,%s,%s,%s, now())
+                    ON CONFLICT (name) DO UPDATE SET
+                      description=EXCLUDED.description,
+                      module=EXCLUDED.module,
+                      code=EXCLUDED.code,
+                      required_keys=EXCLUDED.required_keys,
+                      updated_at=now()
+                    """,
+                    (tu.name, tu.description or "", tu.module, tu.code, json.dumps(tu.required_keys or [])),
+                )
+                conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/mcp_tools_db/delete")
+async def api_mcp_tools_db_delete(payload: dict):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                cur.execute("DELETE FROM public.mcp_tools WHERE name=%s", (name,))
+                conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/mcp_tools_db/import")
+async def api_mcp_tools_db_import():
+    """Import existing on-disk tool modules into the DB catalog.
+
+    Scans gasable_hub/tools/*.py (excluding __init__.py) and upserts each
+    file into public.mcp_tools with module=gasable_hub.tools.
+    """
+    try:
+        tools_dir = Path(__file__).resolve().parent / "gasable_hub" / "tools"
+        if not tools_dir.exists():
+            tools_dir = Path("gasable_hub/tools")
+        if not tools_dir.exists():
+            return {"status": "ok", "imported": 0}
+        files = [p for p in tools_dir.glob("*.py") if p.name != "__init__.py"]
+        count = 0
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_mcp_tools_table(cur)
+                for p in files:
+                    try:
+                        name = p.stem
+                        code = p.read_text(encoding="utf-8")
+                        cur.execute(
+                            """
+                            INSERT INTO public.mcp_tools (name, description, module, code, required_keys, created_at, updated_at)
+                            VALUES (%s,%s,%s,%s,%s, now(), now())
+                            ON CONFLICT (name) DO UPDATE SET
+                              description=EXCLUDED.description,
+                              module=EXCLUDED.module,
+                              code=EXCLUDED.code,
+                              updated_at=now()
+                            """,
+                            (name, "", "gasable_hub.tools", code, json.dumps([])),
+                        )
+                        count += 1
+                    except Exception:
+                        continue
+                conn.commit()
+        return {"status": "ok", "imported": count}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/mcp_tools/draft")
+async def api_mcp_tools_draft(inp: ToolDraftIn):
+    """Draft a tool plan: summary, required keys, starter code, and docs.
+
+    Uses OpenAI when available to generate tailored code from the description.
+    Falls back to heuristics otherwise.
+    """
+    text = (inp.description or "").strip()
+    if not text:
+        return JSONResponse({"error": "description is required"}, status_code=400)
+    wants_supabase = bool(re.search(r"supabase|postgres|database", text, flags=re.IGNORECASE))
+    default_required = ["SUPABASE_DB_URL", "SUPABASE_SERVICE_ROLE"] if wants_supabase else []
+    # Heuristic starter code
+    starter = ""
+    if wants_supabase:
+        starter = TOOL_TEMPLATES_SUPABASE_READ()
+    else:
+        starter = TOOL_TEMPLATES_N8N()
+    docs = []
+    docs.append({"title": "Environment keys required", "body": ", ".join(default_required) or "(none)"})
+    docs.append({"title": "How it works", "body": "This tool registers an MCP function. The server loads needed env keys and executes logic. You can pass arguments at invoke time."})
+    # LLM enhancement if available
+    try:
+        if os.getenv("OPENAI_API_KEY"):
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            prompt = (
+                "You are a senior Python engineer building MCP tools.\n"
+                "Given a user tool description, produce STRICT JSON with keys:\n"
+                "- summary: 1-2 lines\n"
+                "- required_keys: array of strings (env keys; empty if none)\n"
+                "- code: a complete Python module implementing register(mcp) using mcp.server.fastmcp\n"
+                "Rules:\n"
+                "- Use safe timeouts and error handling.\n"
+                "- Allow optional webhook/auth/env keys; read from os.getenv.\n"
+                "- Do NOT include markdown or extra commentary. Only JSON.\n"
+            )
+            resp = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": text},
+                ],
+                temperature=0,
+            )
+            content = resp.choices[0].message.content or "{}"
+            # Attempt to extract JSON even if model returned extra text
+            try:
+                # Find first JSON object substring
+                start = content.find("{")
+                end = content.rfind("}")
+                obj = content[start:end+1] if start != -1 and end != -1 else "{}"
+                data = json.loads(obj)
+            except Exception:
+                data = {}
+            sum2 = data.get("summary") or "Tool draft"
+            req2 = data.get("required_keys") or default_required
+            code2 = data.get("code") or starter
+            # Ensure code looks like a module with register(mcp)
+            if "def register(" not in code2:
+                code2 = starter
+            return {"summary": sum2, "required_keys": req2, "code": code2, "docs": docs}
+    except Exception:
+        pass
+    return {"summary": "Tool draft", "required_keys": default_required, "code": starter, "docs": docs}
+
+
+def TOOL_TEMPLATES_SUPABASE_READ() -> str:
+    return (
+        "from __future__ import annotations\n\n"
+        "import os, psycopg2, psycopg2.extras\n"
+        "try:\n    from mcp.server.fastmcp import Context  # type: ignore\n"
+        "except Exception:\n    class Context:  # type: ignore\n        pass\n\n"
+        "def register(mcp):\n"
+        "    @mcp.tool()\n"
+        "    def supabase_db_query(sql: str, ctx: Context | None = None) -> dict:\n"
+        "        \"\"\"Execute SQL against Supabase Postgres. Use SELECT/INSERT/UPDATE with care.\n"
+        "        Requires env: SUPABASE_DB_URL, SUPABASE_SERVICE_ROLE (optional).\n"
+        "        \"\"\"\n"
+        "        url = os.getenv('SUPABASE_DB_URL', '').strip()\n"
+        "        if not url: return {'status':'error','error':'SUPABASE_DB_URL is required'}\n"
+        "        try:\n"
+        "            conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.DictCursor)\n"
+        "            with conn.cursor() as cur:\n                cur.execute(sql)\n                rows = []\n                try: rows = [dict(r) for r in cur.fetchall()]\n                except Exception: rows = []\n            conn.commit()\n            conn.close()\n            return {'status':'ok','rows': rows}\n"
+        "        except Exception as e:\n            return {'status':'error','error': str(e)}\n"
+    )
+
+
+def TOOL_TEMPLATES_N8N() -> str:
+    return (
+        "from __future__ import annotations\n\n"
+        "import os, requests\n"
+        "try:\n    from mcp.server.fastmcp import Context  # type: ignore\n"
+        "except Exception:\n    class Context:  # type: ignore\n        pass\n\n"
+        "def register(mcp):\n"
+        "    @mcp.tool()\n"
+        "    def webhook_post(payload: dict, ctx: Context | None = None) -> dict:\n"
+        "        url = os.getenv('WEBHOOK_URL','').strip()\n"
+        "        if not url: return {'status':'error','error':'WEBHOOK_URL not set'}\n"
+        "        headers={'Content-Type':'application/json'}\n"
+        "        extra=os.getenv('WEBHOOK_AUTH','').strip()\n"
+        "        if extra: headers['Authorization']=extra\n"
+        "        try:\n"
+        "            r = requests.post(url, json=payload, headers=headers, timeout=60)\n"
+        "            r.raise_for_status()\n"
+        "            return {'status':'ok','result': r.json() if 'application/json' in r.headers.get('content-type','') else r.text}\n"
+        "        except Exception as e:\n            return {'status':'error','error': str(e)}\n"
+    )
 
 
 @app.post("/api/ingest_drive")
@@ -1377,6 +2533,18 @@ async def api_connections():
     except Exception:
         out["connections"].append({"name": "gdrive", "status": "unknown"})
     return out
+
+
+@app.get("/api/recent_errors")
+async def api_recent_errors(limit: int = 100):
+    try:
+        lim = max(1, min(int(limit), 500))
+    except Exception:
+        lim = 100
+    items = list(_RECENT_ERRORS)[-lim:]
+    # newest first
+    items.reverse()
+    return {"items": items, "count": len(items)}
 
 
 @app.get("/health")
@@ -1689,14 +2857,64 @@ class OrchestrateIn(BaseModel):
     agent_preference: str | None = None
 
 
+class OrchestratorSessionIn(BaseModel):
+    message: str
+    user_id: str | None = None
+    memory: dict | None = None
+
+
+class OrchestratorSessionUpdate(BaseModel):
+    plan: dict | None = None
+    memory: dict | None = None
+    status: str | None = None  # planning|awaiting_keys|approved|running|completed|error
+
+
 def _route_intent(text: str) -> str:
     keys = ["order", "buy", "purchase", "procure", "invoice", "checkout"]
     return "procurement" if any(k in text.lower() for k in keys) else "support"
 
 
+def _looks_like_research_then_email(message: str) -> bool:
+    msg = (message or "").lower()
+    # Heuristics: contains a research intent and an email-sending intent
+    research_kw = any(k in msg for k in ("find ", "research", "list", "top "))
+    target_kw = any(k in msg for k in ("supplier", "vendor", "provider", "lead"))
+    region_kw = any(k in msg for k in ("ksa", "saudi", "saudi arabia"))
+    email_kw = any(k in msg for k in ("send", "email", "outreach", "welcome"))
+    chain_kw = ("then" in msg) or ("and" in msg and email_kw)
+    return (research_kw and target_kw and region_kw and email_kw) or chain_kw
+
+
+async def _invoke_tool(name: str, **kwargs):
+    fn, call_kwargs = invoke_tool_via_dummy(name, **kwargs)
+    if asyncio.iscoroutinefunction(fn):
+        return await fn(**call_kwargs)
+    out = fn(**call_kwargs)
+    if asyncio.iscoroutine(out):
+        return await out
+    return out
+
+
+def _ensure_orchestrator_sessions(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS public.orchestrator_sessions (
+          id uuid primary key default gen_random_uuid(),
+          user_id text,
+          status text not null default 'planning',
+          message text,
+          plan jsonb not null default '{}'::jsonb,
+          memory jsonb not null default '{}'::jsonb,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        )
+        """
+    )
+
+
 @app.post("/api/orchestrate")
 async def api_orchestrate(inp: OrchestrateIn):
-    agent = inp.agent_preference or _route_intent(inp.message)
+    agent, meta = _choose_agent_with_rules(inp.message, inp.agent_preference)
     assistant_id = None
     with get_pg_conn() as conn:
         with conn.cursor() as cur:
@@ -1734,7 +2952,262 @@ async def api_orchestrate(inp: OrchestrateIn):
                 (inp.user_id, agent, inp.namespace, inp.message, r.status, thread.id, run.id, text[:2000]),
             )
             conn.commit()
-    return {"agent": agent, "message": text, "status": r.status}
+    return {"agent": agent, "message": text, "status": r.status, "meta": meta}
+
+
+@app.post("/api/orchestrator/sessions")
+async def api_orchestrator_session_create(inp: OrchestratorSessionIn):
+    """Create a long-running orchestrator session (planning + memory)."""
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_orchestrator_sessions(cur)
+                cur.execute(
+                    """
+                    INSERT INTO public.orchestrator_sessions (user_id, status, message, plan, memory)
+                    VALUES (%s,%s,%s,%s,%s)
+                    RETURNING id, status, plan, memory
+                    """,
+                    (inp.user_id or "", "planning", inp.message, {}, json.dumps(inp.memory or {})),
+                )
+                row = cur.fetchone()
+                conn.commit()
+        return {"id": str(row[0]), "status": row[1], "plan": row[2], "memory": row[3]}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/orchestrator/sessions/{sid}/update")
+async def api_orchestrator_session_update(sid: str, body: OrchestratorSessionUpdate):
+    """Update plan/memory/status for a session (used for human-in-the-loop)."""
+    try:
+        sets = []
+        params = {}
+        if body.plan is not None:
+            sets.append("plan=:plan")
+            params["plan"] = json.dumps(body.plan)
+        if body.memory is not None:
+            sets.append("memory=:memory")
+            params["memory"] = json.dumps(body.memory)
+        if body.status is not None:
+            sets.append("status=:status")
+            params["status"] = body.status
+        if not sets:
+            return {"status": "ok"}
+        q = "UPDATE public.orchestrator_sessions SET " + ", ".join(sets) + ", updated_at=now() WHERE id=:id"
+        params["id"] = sid
+        from sqlalchemy import text
+        from gasable_nodes.registry import engine
+        with engine().begin() as c:
+            c.execute(text(q), params)
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/orchestrator/sessions/{sid}")
+async def api_orchestrator_session_get(sid: str):
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_orchestrator_sessions(cur)
+                cur.execute("SELECT id, user_id, status, message, plan, memory, created_at, updated_at FROM public.orchestrator_sessions WHERE id=%s", (sid,))
+                row = cur.fetchone()
+        if not row:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {
+            "id": str(row[0]),
+            "user_id": row[1],
+            "status": row[2],
+            "message": row[3],
+            "plan": row[4],
+            "memory": row[5],
+            "created_at": row[6].isoformat() if row[6] else None,
+            "updated_at": row[7].isoformat() if row[7] else None,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/orchestrate_stream")
+async def api_orchestrate_stream(request: Request, message: str, namespace: str = "global", agent_preference: str | None = None):
+    async def event_gen():
+        try:
+            # Initial ping to open the stream promptly in proxies
+            yield {"event": "step", "data": json.dumps({"step": "stream_open", "ts": time.time()})}
+            yield {"event": "step", "data": json.dumps({"step": "received_message", "ts": time.time(), "meta": {"namespace": namespace}})}
+            agent, meta = _choose_agent_with_rules(message, agent_preference)
+            yield {"event": "step", "data": json.dumps({"step": "agent_selected", "ts": time.time(), "meta": {"agent": agent, **meta}})}
+
+            # Multi-agent fast path: research then email
+            if _looks_like_research_then_email(message):
+                yield {"event": "step", "data": json.dumps({"step": "planning_multi_agent", "ts": time.time(), "meta": {"plan": ["research_suppliers", "compose_email", "optional_send_email"]}})}
+
+                # 1) Research: ingest some web context (best effort)
+                try:
+                    r_ing = await _invoke_tool(
+                        "ingest_web",
+                        query=message,
+                        max_results=int(os.getenv("RESEARCH_MAX_RESULTS", "10")),
+                        allow_domains_csv=os.getenv("RESEARCH_ALLOW_DOMAINS", ""),
+                        ctx=None,
+                    )
+                    ingested = int(r_ing.get("ingested", 0)) if isinstance(r_ing, dict) else 0
+                    yield {"event": "step", "data": json.dumps({"step": "research_ingested", "ts": time.time(), "meta": {"ingested": ingested}})}
+                except Exception as e:  # pragma: no cover
+                    yield {"event": "step", "data": json.dumps({"step": "research_ingest_error", "ts": time.time(), "meta": {"error": str(e)}})}
+
+                # 2) Research: hybrid RAG search for suppliers answer
+                r_rag = await _invoke_tool("rag_search_tool", query=message, k=20, agent_id="research", namespace=namespace, ctx=None)
+                answer_text = ""
+                try:
+                    if isinstance(r_rag, dict):
+                        answer_text = str(r_rag.get("answer") or "").strip()
+                except Exception:
+                    answer_text = ""
+                yield {"event": "step", "data": json.dumps({"step": "research_answer", "ts": time.time(), "meta": {"have_answer": bool(answer_text)}})}
+
+                # 3) Extract suppliers list
+                suppliers: list[dict] = []
+                try:
+                    ext = await _invoke_tool(
+                        "extract_suppliers",
+                        text=answer_text or ("\n".join([str(h.get("txt")) for h in (r_rag.get("hits") or [])]) if isinstance(r_rag, dict) else message),
+                        max_items=10,
+                        region_hint="KSA",
+                        industry_hint="diesel",
+                        ctx=None,
+                    )
+                    if isinstance(ext, dict) and isinstance(ext.get("suppliers"), list):
+                        suppliers = [s for s in ext["suppliers"] if isinstance(s, dict)]
+                except Exception as e:  # pragma: no cover
+                    yield {"event": "step", "data": json.dumps({"step": "extract_suppliers_error", "ts": time.time(), "meta": {"error": str(e)}})}
+                yield {"event": "step", "data": json.dumps({"step": "research_extracted", "ts": time.time(), "meta": {"count": len(suppliers)}})}
+
+                # 4) Compose marketing email
+                email_subject = ""
+                email_body = ""
+                try:
+                    comp = await _invoke_tool(
+                        "compose_email",
+                        topic="Welcome outreach for diesel supplier partnership in KSA",
+                        leads=suppliers,
+                        goal="welcome",
+                        tone="professional",
+                        language=os.getenv("OUTREACH_LANG", "en"),
+                        company_name=os.getenv("COMPANY_NAME", "Gasable"),
+                        company_offer=os.getenv("COMPANY_OFFER", "Fuel distribution and logistics partnerships"),
+                        ctx=None,
+                    )
+                    if isinstance(comp, dict):
+                        email_subject = str(comp.get("subject") or "").strip()
+                        email_body = str(comp.get("body") or "").strip()
+                except Exception as e:  # pragma: no cover
+                    yield {"event": "step", "data": json.dumps({"step": "compose_email_error", "ts": time.time(), "meta": {"error": str(e)}})}
+                yield {"event": "step", "data": json.dumps({"step": "marketing_email_drafted", "ts": time.time(), "meta": {"subject": email_subject[:120], "body_chars": len(email_body)}})}
+
+                # 5) Optionally send via Gmail nodes if configured (credentials required)
+                sent_count = 0
+                send_enabled = os.getenv("ENABLE_EMAIL_SEND", "0").lower() in ("1", "true")
+                if send_enabled and suppliers and email_subject and email_body:
+                    # We prepare drafts; actual send requires credentials provisioning outside this flow.
+                    yield {"event": "step", "data": json.dumps({"step": "email_send_skipped", "ts": time.time(), "meta": {"reason": "credentials_required_or_disabled"}})}
+
+                # Final message summarizing the outcome
+                summary = (
+                    f"Identified {len(suppliers)} suppliers in KSA and drafted a welcome email. "
+                    f"Configure Gmail credentials to send automatically, or copy/paste the draft."
+                )
+                yield {"event": "final", "data": json.dumps({"agent": "multi", "message": summary, "status": "completed", "meta": {"suppliers": suppliers[:10], "email_subject": email_subject}})}
+                return
+
+            with get_pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("select assistant_id from public.gasable_agents where id=%s", (agent,))
+                    row = cur.fetchone()
+                    assistant_id = row[0] if row else None
+
+            if not assistant_id:
+                # Try to provision just this assistant if OpenAI key is present
+                try:
+                    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                    yield {"event": "step", "data": json.dumps({"step": "provisioning_assistant", "ts": time.time(), "meta": {"agent": agent}})}
+                    # Load agent settings
+                    with get_pg_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("select display_name, system_prompt, answer_model from public.gasable_agents where id=%s", (agent,))
+                            r = cur.fetchone()
+                    display, prompt, model = (r[0] if r else agent), (r[1] if r else ""), (r[2] if r else os.getenv("OPENAI_MODEL", "gpt-5-mini"))
+                    assistant = client.beta.assistants.create(
+                        model=model or os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+                        name=display or f"Gasable {agent}",
+                        instructions=prompt or "",
+                        tools=[_mcp_tool()],
+                        metadata={"agent_id": agent},
+                    )
+                    assistant_id = assistant.id
+                    with get_pg_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("update public.gasable_agents set assistant_id=%s, updated_at=now() where id=%s", (assistant_id, agent))
+                            conn.commit()
+                    yield {"event": "step", "data": json.dumps({"step": "assistant_provisioned", "ts": time.time(), "meta": {"assistant_id": assistant_id}})}
+                except Exception as e:
+                    yield {"event": "final", "data": json.dumps({"error": f"assistant not provisioned: {str(e)}", "agent": agent})}
+                    return
+
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            yield {"event": "step", "data": json.dumps({"step": "creating_thread", "ts": time.time()})}
+            thread = client.beta.threads.create()
+            client.beta.threads.messages.create(thread_id=thread.id, role="user", content=message)
+            yield {"event": "step", "data": json.dumps({"step": "starting_run", "ts": time.time(), "meta": {"assistant_id": assistant_id}})}
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=assistant_id,
+                tool_choice="auto",
+                metadata={"namespace": namespace},
+            )
+            status = None
+            # Poll run status with periodic heartbeat so UI stays live
+            tick = 0
+            while True:
+                r = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                if r.status != status:
+                    status = r.status
+                    yield {"event": "step", "data": json.dumps({"step": "run_status", "ts": time.time(), "meta": {"status": status}})}
+                if r.status in ("completed", "failed", "requires_action", "expired", "cancelled"):
+                    break
+                tick += 1
+                if tick % 6 == 0:
+                    # heartbeat every ~3s
+                    yield {"event": "step", "data": json.dumps({"step": "heartbeat", "ts": time.time()})}
+                await asyncio.sleep(0.5)
+
+            msgs = client.beta.threads.messages.list(thread_id=thread.id)
+            final = next((m for m in msgs.data if m.role == "assistant"), None)
+            text = final.content[0].text.value if (final and final.content) else ""
+
+            # Audit
+            try:
+                with get_pg_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            insert into public.agent_runs (user_id, selected_agent, namespace, user_message, run_status, openai_thread_id, openai_run_id, result_summary)
+                            values (%s,%s,%s,%s,%s,%s,%s,%s)
+                            """,
+                            ("ui_user", agent, namespace, message, status, thread.id, run.id, text[:2000]),
+                        )
+                        conn.commit()
+            except Exception:
+                pass
+
+            yield {"event": "final", "data": json.dumps({"agent": agent, "message": text, "status": status})}
+        except Exception as e:  # pragma: no cover
+            yield {"event": "final", "data": json.dumps({"error": str(e)})}
+            return
+
+    # Disable HTTP buffering for real-time delivery (where supported)
+    return EventSourceResponse(event_gen(), ping=15000)
 
 
 class AgentUpsert(BaseModel):
@@ -1751,24 +3224,32 @@ class AgentUpsert(BaseModel):
 
 @app.get("/api/agents")
 async def api_agents_list():
-    with get_pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                select id, display_name, namespace, system_prompt, tool_allowlist,
-                       answer_model, rerank_model, top_k, assistant_id, api_key, rag_settings
-                from public.gasable_agents
-                order by id
-                """
-            )
-            rows = cur.fetchall()
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_agents_table(cur)
+                cur.execute(
+                    """
+                    select id, display_name, namespace, system_prompt, tool_allowlist,
+                           answer_model, rerank_model, top_k, assistant_id, api_key, rag_settings
+                    from public.gasable_agents
+                    order by id
+                    """
+                )
+                rows = cur.fetchall()
+    except PGError as exc:
+        logger.warning("Falling back to local agent seed (db unavailable): %s", exc)
+        return {"agents": _fallback_agents()}
+    def _default_prompt(display: str, aid: str) -> str:
+        base = display or (aid and f"Gasable {aid}") or "Gasable Agent"
+        return f"You are {base}. Be safe, concise, and helpful."
     return {
         "agents": [
             {
                 "id": r[0],
                 "display_name": r[1],
                 "namespace": r[2],
-                "system_prompt": r[3],
+                "system_prompt": (r[3] or _default_prompt(r[1] or "", r[0] or "")),
                 "tool_allowlist": r[4],
                 "answer_model": r[5],
                 "rerank_model": r[6],
@@ -1784,12 +3265,43 @@ async def api_agents_list():
 
 @app.get("/api/orchestrator")
 async def api_orchestrator_get():
-    with get_pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("select system_prompt, rules from public.gasable_orchestrator where id='default'")
-            row = cur.fetchone()
+    row = None
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                # Ensure table exists before selecting
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.gasable_orchestrator (
+                      id text primary key,
+                      system_prompt text not null,
+                      rules jsonb not null default '{}'::jsonb,
+                      updated_at timestamptz not null default now()
+                    )
+                    """
+                )
+                cur.execute("select system_prompt, rules from public.gasable_orchestrator where id='default'")
+                row = cur.fetchone()
+    except PGError as exc:
+        logger.warning("Orchestrator config fallback (db unavailable): %s", exc)
     if not row:
-        return {"system_prompt": "", "rules": {}}
+        # Provide a sensible default prompt and rules if not configured yet
+        default_prompt = (
+            "You are the Gasable Orchestrator. Your job is to route the user's request to the best "
+            "agent among the available list. Consider the agent's purpose, the tools they have, and the "
+            "intent of the request. If an order is being placed, prefer Procurement. If it is general "
+            "company info or support, prefer Support. If research is requested, prefer Research. If "
+            "marketing or email content is requested, prefer Marketing. Return only the agent id."
+        )
+        default_rules = {
+            "keywords": {
+                "procurement": ["order", "buy", "purchase", "invoice", "checkout"],
+                "research": ["research", "analyze", "web", "find"],
+                "marketing": ["email", "campaign", "content", "marketing"],
+                "support": ["support", "help", "info", "what is", "how to"],
+            }
+        }
+        return {"system_prompt": default_prompt, "rules": default_rules}
     return {"system_prompt": row[0] or "", "rules": row[1] or {}}
 
 
@@ -1800,53 +3312,70 @@ class OrchestratorUpdate(BaseModel):
 
 @app.post("/api/orchestrator")
 async def api_orchestrator_set(cfg: OrchestratorUpdate):
-    with get_pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                insert into public.gasable_orchestrator (id, system_prompt, rules)
-                values ('default', %s, %s)
-                on conflict (id) do update set system_prompt=excluded.system_prompt, rules=excluded.rules, updated_at=now()
-                """,
-                (cfg.system_prompt, cfg.rules or {}),
-            )
-            conn.commit()
-    return {"status": "ok"}
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into public.gasable_orchestrator (id, system_prompt, rules)
+                    values ('default', %s, %s)
+                    on conflict (id) do update set system_prompt=excluded.system_prompt, rules=excluded.rules, updated_at=now()
+                    """,
+                    (cfg.system_prompt, pgx.Json(cfg.rules or {})),
+                )
+                conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/api/agents")
 async def api_agents_upsert(a: AgentUpsert):
-    with get_pg_conn() as conn:
-        with conn.cursor() as cur:
-            # Optional: rewrite/normalize system_prompt using LLM for clarity
-            try:
-                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-                prompt = (
-                    "Rewrite the following agent instruction into a crisp, actionable, "
-                    "safety-aware system prompt for an assistant. Keep intent; improve clarity; "
-                    "avoid meta; use imperative voice. Return only the rewritten prompt.\n\n" + a.system_prompt
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_agents_table(cur)
+                # Optional: rewrite/normalize system_prompt using LLM for clarity
+                try:
+                    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                    prompt = (
+                        "Rewrite the following agent instruction into a crisp, actionable, "
+                        "safety-aware system prompt for an assistant. Keep intent; improve clarity; "
+                        "avoid meta; use imperative voice. Return only the rewritten prompt.\n\n" + a.system_prompt
+                    )
+                    resp = client.chat.completions.create(
+                        model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+                        temperature=0,
+                        messages=[
+                            {"role": "system", "content": "You rewrite prompts precisely and safely."},
+                            {"role": "user", "content": prompt},
+                        ],
+                    )
+                    sys_rewritten = (resp.choices[0].message.content or a.system_prompt).strip()
+                except Exception:
+                    sys_rewritten = a.system_prompt
+                cur.execute(
+                    """
+                    insert into public.gasable_agents (id, display_name, system_prompt, tool_allowlist, namespace, answer_model, rerank_model, top_k, rag_settings)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    on conflict (id) do update set display_name=excluded.display_name, system_prompt=excluded.system_prompt, tool_allowlist=excluded.tool_allowlist, namespace=excluded.namespace, answer_model=excluded.answer_model, rerank_model=excluded.rerank_model, top_k=excluded.top_k, rag_settings=excluded.rag_settings, updated_at=now()
+                    """,
+                    (
+                        a.id,
+                        a.display_name,
+                        sys_rewritten,
+                        [str(x) for x in (a.tool_allowlist or [])],
+                        a.namespace,
+                        a.answer_model,
+                        a.rerank_model,
+                        int(a.top_k),
+                        pgx.Json(getattr(a, "rag_settings", {}) or {}),
+                    ),
                 )
-                resp = client.chat.completions.create(
-                    model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-                    temperature=0,
-                    messages=[
-                        {"role": "system", "content": "You rewrite prompts precisely and safely."},
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-                sys_rewritten = (resp.choices[0].message.content or a.system_prompt).strip()
-            except Exception:
-                sys_rewritten = a.system_prompt
-            cur.execute(
-                """
-                insert into public.gasable_agents (id, display_name, system_prompt, tool_allowlist, namespace, answer_model, rerank_model, top_k, rag_settings)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                on conflict (id) do update set display_name=excluded.display_name, system_prompt=excluded.system_prompt, tool_allowlist=excluded.tool_allowlist, namespace=excluded.namespace, answer_model=excluded.answer_model, rerank_model=excluded.rerank_model, top_k=excluded.top_k, rag_settings=excluded.rag_settings, updated_at=now()
-                """,
-                (a.id, a.display_name, sys_rewritten, a.tool_allowlist, a.namespace, a.answer_model, a.rerank_model, a.top_k, getattr(a, "rag_settings", {}) or {}),
-            )
-            conn.commit()
-    return {"status": "ok"}
+                conn.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/api/agents/{agent_id}/rotate_key")
@@ -1855,6 +3384,7 @@ async def api_agent_rotate_key(agent_id: str):
     new_key = secrets.token_urlsafe(40)
     with get_pg_conn() as conn:
         with conn.cursor() as cur:
+            _ensure_agents_table(cur)
             cur.execute(
                 "update public.gasable_agents set api_key=%s, updated_at=now() where id=%s",
                 (new_key, agent_id),
@@ -1874,6 +3404,7 @@ async def api_agent_direct_chat(agent_id: str, payload: DirectAgentIn, request: 
     provided = request.headers.get("X-API-Key") or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     with get_pg_conn() as conn:
         with conn.cursor() as cur:
+            _ensure_agents_table(cur)
             cur.execute("select api_key, assistant_id from public.gasable_agents where id=%s", (agent_id,))
             row = cur.fetchone()
     if not row:
@@ -1905,6 +3436,38 @@ async def api_agent_direct_chat(agent_id: str, payload: DirectAgentIn, request: 
 
 class PromptRewriteIn(BaseModel):
     text: str
+def _structured_prompt_from_brief(brief: str) -> str:
+    b = (brief or "").strip()
+    return (
+        "Role & Persona\n"
+        "- You are a specialized assistant built for this purpose: " + (b[:200] or "(describe purpose)") + "\n"
+        "- Be expert, concise, safety-aware, and action-oriented.\n\n"
+        "Primary Objectives\n"
+        "- Understand the user's goal and missing context.\n"
+        "- Retrieve or derive relevant information before answering.\n"
+        "- Provide accurate, sourced, and actionable outputs.\n\n"
+        "Retrieval & Tools Usage\n"
+        "- Use available tools when external data or actions are needed.\n"
+        "- Cite sources or IDs for any retrieved content.\n"
+        "- Ask clarifying questions if input is ambiguous.\n\n"
+        "Reasoning Boundaries & Safety\n"
+        "- Do not reveal hidden chain-of-thought; summarize rationale briefly.\n"
+        "- Avoid hallucinations; say 'I don't know' and propose next steps.\n"
+        "- Respect user privacy and company policies.\n\n"
+        "Output Format\n"
+        "- Use clear headings, bullets, and short paragraphs.\n"
+        "- Include a brief 'Next Steps' section when applicable.\n\n"
+        "Step-by-Step Procedure\n"
+        "1) Restate the request succinctly.\n"
+        "2) Identify required info and constraints.\n"
+        "3) Retrieve/compute and validate results.\n"
+        "4) Synthesize a structured, direct answer.\n"
+        "5) Provide references and next steps.\n\n"
+        "Edge Cases & Fallbacks\n"
+        "- If data is missing or stale, say so; suggest how to obtain it.\n"
+        "- If a tool fails, retry once with backoff; otherwise report failure.\n"
+    )
+
 
 
 @app.post("/api/prompt_rewrite")
@@ -1919,23 +3482,38 @@ async def api_prompt_rewrite(inp: PromptRewriteIn):
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         prompt = (
-            "Rewrite the following agent instruction into a crisp, actionable, "
-            "safety-aware system prompt for an assistant. Keep the user's original intent; "
-            "improve clarity and structure; avoid meta-commentary; use imperative voice. "
-            "Return only the rewritten prompt.\n\n" + txt
+            "You are tasked with converting the user's raw agent brief into a production-ready system prompt that maximizes quality, reliability, and safety.\n"
+            "Rewrite the instruction in deep detail with clear sections and actionable rules.\n\n"
+            "Requirements:\n"
+            "- Use direct, imperative voice; avoid meta-commentary.\n"
+            "- Include these sections with short, focused bullet points:\n"
+            "  1) Role & Persona\n"
+            "  2) Primary Objectives\n"
+            "  3) Retrieval & Tools Usage (how and when to call tools; cite sources)\n"
+            "  4) Reasoning Boundaries & Safety (no chain-of-thought; summarize reasoning only)\n"
+            "  5) Output Format (structure, style, language)\n"
+            "  6) Step-by-Step Procedure (from query intake to final answer)\n"
+            "  7) Edge Cases & Fallbacks\n"
+            "- Keep to ~200–400 words.\n"
+            "- Do NOT include code blocks or YAML; just plain text with headings.\n\n"
+            "Original brief:\n" + txt
         )
         resp = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-            temperature=0,
+            temperature=0.2,
             messages=[
-                {"role": "system", "content": "You rewrite prompts precisely, concisely, and safely."},
+                {"role": "system", "content": "You produce comprehensive, operational system prompts with strict safety and clarity. Never include chain-of-thought."},
                 {"role": "user", "content": prompt},
             ],
         )
         out = (resp.choices[0].message.content or txt).strip()
+        # If the model returned something too similar, synthesize a structured version locally
+        if out.replace("\n", " ").strip().lower() == txt.replace("\n", " ").strip().lower() or len(out) < max(200, len(txt)):
+            out = _structured_prompt_from_brief(txt)
         return {"rewritten": out}
     except Exception:
-        return {"rewritten": txt}
+        # Fallback: deterministic structured prompt so UI always sees a change
+        return {"rewritten": _structured_prompt_from_brief(txt)}
 
 
 @app.post("/api/assistants/provision")
@@ -1961,6 +3539,7 @@ async def api_assistants_sync():
         updated = 0
         with get_pg_conn() as conn:
             with conn.cursor() as cur:
+                _ensure_agents_table(cur)
                 cur.execute(
                     """
                     select id, display_name, system_prompt, answer_model, assistant_id
@@ -2019,6 +3598,7 @@ class WorkflowUpsert(BaseModel):
     display_name: str
     namespace: str = "global"
     graph: dict
+    description: str | None = None
 
 
 class WorkflowRun(BaseModel):
@@ -2026,37 +3606,307 @@ class WorkflowRun(BaseModel):
     context: dict | None = None
 
 
+def _ensure_workflows_table(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS public.gasable_workflows (
+            id            text primary key,
+            display_name  text not null,
+            namespace     text not null default 'global',
+            graph         jsonb not null default '{}'::jsonb,
+            description   text,
+            created_at    timestamptz not null default now(),
+            updated_at    timestamptz not null default now()
+        )
+        """
+    )
+    try:
+        cur.execute("ALTER TABLE public.gasable_workflows ADD COLUMN IF NOT EXISTS description text")
+    except Exception:
+        pass
+
+
+def _summarize_workflow_graph(graph: dict) -> str:
+    try:
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        node_count = len(nodes) if isinstance(nodes, list) else 0
+        edge_count = len(edges) if isinstance(edges, list) else 0
+        tools = []
+        if isinstance(nodes, list):
+            for n in nodes:
+                if isinstance(n, dict) and isinstance(n.get("tool"), str):
+                    tools.append(n["tool"])
+        tools_unique = sorted(list({*tools}))
+        parts = []
+        if tools_unique:
+            parts.append("Tools: " + ", ".join(tools_unique))
+        parts.append(f"Nodes: {node_count}")
+        parts.append(f"Connections: {edge_count}")
+        return "; ".join(parts)
+    except Exception:
+        return ""
+
+
+def _template_description_for_workflow(cur, workflow_id: str, display_name: str) -> str | None:
+    # Try by slug/id match, then by name
+    try:
+        # direct slug/id
+        cur.execute("select description from public.templates where slug=%s", (workflow_id,))
+        row = cur.fetchone()
+        if row and row[0]:
+            return str(row[0])
+        # name match
+        cur.execute("select description from public.templates where name=%s order by created_at desc limit 1", (display_name,))
+        row = cur.fetchone()
+        if row and row[0]:
+            return str(row[0])
+    except Exception:
+        pass
+    return None
+
+
 @app.get("/api/workflows")
-async def api_workflows_list(namespace: str = "global"):
-    with get_pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("select id, display_name, namespace, graph from public.gasable_workflows where namespace=%s order by id", (namespace,))
-            rows = cur.fetchall()
-    return {"workflows": [{"id": r[0], "display_name": r[1], "namespace": r[2], "graph": r[3]} for r in rows]}
+async def api_workflows_list(namespace: str = "global", limit: int = 200, offset: int = 0):
+    try:
+        limit_val = max(1, min(int(limit), 500))
+    except Exception:
+        limit_val = 200
+    try:
+        offset_val = max(0, int(offset))
+    except Exception:
+        offset_val = 0
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                # Avoid long-running scans on large datasets
+                try:
+                    cur.execute("SET LOCAL statement_timeout = 30000")
+                except Exception:
+                    pass
+                _ensure_workflows_table(cur)
+                cur.execute(
+                    "select id, display_name, namespace, graph, coalesce(description,'') from public.gasable_workflows where namespace=%s order by id limit %s offset %s",
+                    (namespace, limit_val, offset_val),
+                )
+                rows = cur.fetchall()
+    except PGError as exc:
+        logger.warning("Falling back to local workflow seed (db unavailable): %s", exc)
+        seeds = _fallback_workflows(namespace, limit_val, offset_val)
+        return {"workflows": [_serialize_workflow_entry(seed) for seed in seeds]}
+    # Derive description and tools from graph for convenience in UI
+    out: list[dict] = []
+    for r in rows:
+        g = r[3]
+        description: str | None = (r[4] or None)
+        tools: list[str] = []
+        tool_descriptions: dict[str, str] = {}
+        tool_required_keys: dict[str, list[str]] = {}
+        try:
+            nodes = (g or {}).get("nodes") or []
+            if isinstance(nodes, list):
+                for n in nodes:
+                    if not description:
+                        # Prefer explicit node description
+                        if isinstance(n, dict) and isinstance(n.get("description"), str) and n["description"].strip():
+                            description = n["description"].strip()
+                        # Fall back to tool description if present
+                        elif isinstance(n, dict) and isinstance(n.get("tool_description"), str) and n["tool_description"].strip():
+                            description = n["tool_description"].strip()
+                    t = n.get("tool") if isinstance(n, dict) else None
+                    if isinstance(t, str):
+                        tools.append(t)
+                        # Capture per-tool description/required_keys if embedded in node
+                        try:
+                            if isinstance(n.get("tool_description"), str) and n["tool_description"].strip():
+                                tool_descriptions[t] = n["tool_description"].strip()
+                        except Exception:
+                            pass
+                        try:
+                            rk = n.get("required_keys") or []
+                            if isinstance(rk, list) and rk:
+                                tool_required_keys[t] = [str(x) for x in rk]
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        # Fallback: template description
+        if not description:
+            try:
+                with get_pg_conn() as conn:
+                    with conn.cursor() as cur:
+                        td = _template_description_for_workflow(cur, r[0], r[1])
+                        if td:
+                            description = td
+            except PGError:
+                pass
+        # Fallback: heuristic
+        if not description:
+            description = _summarize_workflow_graph(g)
+        out.append({
+            "id": r[0],
+            "display_name": r[1],
+            "namespace": r[2],
+            "graph": g,
+            "description": description,
+            "tools": sorted(list({*tools}))[:20],
+            "tool_details": {k: {"description": tool_descriptions.get(k), "required_keys": tool_required_keys.get(k, [])} for k in set(tools)},
+        })
+    return {"workflows": out}
 
 
 @app.get("/api/workflows/{wid}")
-async def api_workflows_get(wid: str):
-    with get_pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("select id, display_name, namespace, graph from public.gasable_workflows where id=%s", (wid,))
-            row = cur.fetchone()
+async def api_workflows_get(wid: str, enrich: bool = False):
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                _ensure_workflows_table(cur)
+                cur.execute("select id, display_name, namespace, graph, coalesce(description,'') from public.gasable_workflows where id=%s", (wid,))
+                row = cur.fetchone()
+    except PGError as exc:
+        logger.warning("Workflow %s fallback (db unavailable): %s", wid, exc)
+        seed = next((copy.deepcopy(item) for item in _DEFAULT_WORKFLOW_SEED if item["id"] == wid), None)
+        if not seed:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = _serialize_workflow_entry(seed)
+        graph = payload["graph"]
+        if enrich and isinstance(graph, dict):
+            graph = _enrich_workflow_graph(graph)
+        return {
+            "id": payload["id"],
+            "display_name": payload["display_name"],
+            "namespace": payload["namespace"],
+            "graph": graph,
+            "description": payload.get("description"),
+        }
     if not row:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return {"id": row[0], "display_name": row[1], "namespace": row[2], "graph": row[3]}
+    desc = row[4] or None
+    if not desc:
+        # Try template, then heuristic
+        try:
+            with get_pg_conn() as conn:
+                with conn.cursor() as cur:
+                    td = _template_description_for_workflow(cur, row[0], row[1])
+                    if td:
+                        desc = td
+        except PGError:
+            pass
+    if not desc:
+        try:
+            desc = _summarize_workflow_graph(row[3] or {}) or None
+        except Exception:
+            desc = None
+    
+    graph = row[3] or {}
+    
+    # Enrich nodes with specs from nodes registry if requested
+    if enrich and isinstance(graph, dict):
+        graph = _enrich_workflow_graph(graph)
+    
+    return {"id": row[0], "display_name": row[1], "namespace": row[2], "graph": graph, "description": desc}
+
+
+def _enrich_workflow_graph(graph: dict) -> dict:
+    """Enrich workflow graph nodes with specs from the nodes registry."""
+    try:
+        from gasable_nodes.registry import get_node, _infer_required_keys
+        
+        nodes = graph.get("nodes", [])
+        if not isinstance(nodes, list):
+            return graph
+        
+        enriched_nodes = []
+        def _sanitize_tool_name(name: str) -> str:
+            # Map n8n-style identifiers to our registry convention leaf.leaf
+            leaf = name.split(".")[-1].lower()
+            for suf in ("trigger", "workflow"):
+                if leaf.endswith(suf):
+                    leaf = leaf[: -len(suf)]
+                    break
+            import re as _re
+            leaf = _re.sub(r"[^a-z0-9_]+", "_", leaf) or "node"
+            return f"{leaf}.{leaf}"
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                enriched_nodes.append(node)
+                continue
+                
+            enriched = dict(node)
+            
+            # Try to get node spec if toolName is specified
+            tool_name = node.get("data", {}).get("toolName") if isinstance(node.get("data"), dict) else None
+            if not tool_name:
+                tool_name = node.get("tool")
+            
+            if tool_name:
+                try:
+                    spec = get_node(tool_name)
+                    if not spec and isinstance(tool_name, str):
+                        # Try sanitized fallback mapping
+                        alt = _sanitize_tool_name(tool_name)
+                        spec = get_node(alt)
+                    if spec and isinstance(spec, dict):
+                        # Add description from spec
+                        if spec.get("doc") and not enriched.get("data", {}).get("description"):
+                            if "data" not in enriched:
+                                enriched["data"] = {}
+                            enriched["data"]["description"] = spec["doc"]
+                        
+                        # Add title if available
+                        if spec.get("title"):
+                            if "data" not in enriched:
+                                enriched["data"] = {}
+                            if not enriched["data"].get("label"):
+                                enriched["data"]["label"] = spec["title"]
+                        
+                        # Add required keys (from spec, or heuristic fallback)
+                        req_keys = _infer_required_keys(spec) or []
+                        if not req_keys and isinstance(tool_name, str):
+                            low = tool_name.lower()
+                            # Heuristic mapping for common providers
+                            if any(k in low for k in ("openai", "gpt-", "gpt4", "chatgpt")):
+                                req_keys = ["OPENAI_API_KEY"]
+                            elif any(k in low for k in ("notion",)):
+                                req_keys = ["NOTION_API_KEY"]
+                            elif any(k in low for k in ("gmail", "google", "sheets", "sheet")):
+                                req_keys = ["GOOGLE_ACCESS_TOKEN"]
+                            elif any(k in low for k in ("slack",)):
+                                req_keys = ["SLACK_BOT_TOKEN"]
+                        if req_keys:
+                            enriched["required_keys"] = req_keys
+                        
+                        # Add auth info
+                        if spec.get("auth"):
+                            enriched["auth"] = spec["auth"]
+                        
+                        # Add category
+                        if spec.get("category"):
+                            enriched["category"] = spec["category"]
+                except Exception as e:
+                    logger.warning(f"Failed to enrich node {tool_name}: {e}")
+            
+            enriched_nodes.append(enriched)
+        
+        return {**graph, "nodes": enriched_nodes}
+    except Exception as e:
+        logger.warning(f"Failed to enrich workflow graph: {e}")
+        return graph
 
 
 @app.post("/api/workflows")
 async def api_workflows_upsert(w: WorkflowUpsert):
     with get_pg_conn() as conn:
         with conn.cursor() as cur:
+            _ensure_workflows_table(cur)
             cur.execute(
                 """
-                insert into public.gasable_workflows (id, display_name, namespace, graph)
-                values (%s,%s,%s,%s)
-                on conflict (id) do update set display_name=excluded.display_name, namespace=excluded.namespace, graph=excluded.graph, updated_at=now()
+                insert into public.gasable_workflows (id, display_name, namespace, graph, description)
+                values (%s,%s,%s,%s,%s)
+                on conflict (id) do update set display_name=excluded.display_name, namespace=excluded.namespace, graph=excluded.graph, description=excluded.description, updated_at=now()
                 """,
-                (w.id, w.display_name, w.namespace, json.dumps(w.graph)),
+                (w.id, w.display_name, w.namespace, json.dumps(w.graph), (w.description or None)),
             )
             conn.commit()
     return {"status": "ok"}

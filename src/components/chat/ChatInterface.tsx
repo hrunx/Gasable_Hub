@@ -34,6 +34,7 @@ export function ChatInterface({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [steps, setSteps] = useState<Array<{ step: string; ts?: number; meta?: Record<string, unknown> }>>([]);
   const selectedAgent = selectedAgentProp; // Use prop for controlled component
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -60,32 +61,35 @@ export function ChatInterface({
     setIsLoading(true);
 
     try {
-      let response;
-      let data;
-
-      if (selectedAgent === null) {
-        data = await api.orchestrate({
-          user_id: "demo_user",
+      // Start streaming orchestrator steps for transparency (live timeline only)
+      setSteps([{ step: "sending", ts: Date.now() }]);
+      api.orchestrateStream(
+        {
           message: messageContent,
           namespace: "global",
-        });
-      } else {
-        data = await api.orchestrate({
-          user_id: "demo_user",
-          message: messageContent,
-          namespace: "global",
-          agent_preference: selectedAgent,
-        });
-      }
-
-      const assistantMessage: Message = {
-        role: "assistant",
-        content: data.message || data.error || "Sorry, something went wrong.",
-        agent: data.agent || selectedAgent,
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
+          agent_preference: selectedAgent || undefined,
+        },
+        (evt) => {
+          if (evt.event === "open") {
+            setSteps((prev) => [...prev, { step: "stream_open", ts: Date.now() }]);
+          } else if (evt.event === "step") {
+            const s = evt.data as { step: string; ts?: number; meta?: Record<string, unknown> };
+            setSteps((prev) => [...prev, s]);
+          } else if (evt.event === "final") {
+            const d = evt.data as any;
+            const assistantMessage: Message = {
+              role: "assistant",
+              content: d.message || d.error || "Sorry, something went wrong.",
+              agent: d.agent || selectedAgent || undefined,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+            setIsLoading(false);
+          } else if (evt.event === "error") {
+            setSteps((prev) => [...prev, { step: "stream_error", ts: Date.now(), meta: evt.data }]);
+          }
+        }
+      );
     } catch {
       const errorMessage: Message = {
         role: "assistant",
@@ -94,7 +98,7 @@ export function ChatInterface({
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
+      // isLoading will be turned off on final event
     }
   };
 
@@ -214,6 +218,27 @@ export function ChatInterface({
         )}
 
         <div ref={messagesEndRef} />
+      </div>
+
+      {/* Orchestrator Steps */}
+      <div className="block border-t p-3">
+        <div className="text-xs font-semibold mb-2">Process</div>
+        {steps.length === 0 ? (
+          <div className="text-xs text-gray-500">No steps yet. Send a message to view backend steps.</div>
+        ) : (
+          <div className="max-h-40 overflow-auto text-xs space-y-1">
+            {steps.map((s, i) => (
+              <div key={i} className="bg-gray-50 border rounded p-2">
+                <div className="font-mono">{s.step}</div>
+                {s.meta && (
+                  <div className="mt-1 text-gray-600 break-words">
+                    {JSON.stringify(s.meta)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Input */}

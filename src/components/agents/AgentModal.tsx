@@ -39,7 +39,9 @@ interface AgentModalProps {
 
 export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
   const queryClient = useQueryClient();
+  const [rewriteLoading, setRewriteLoading] = useState(false);
   const { toast } = useToast();
+  const [showRagDetails, setShowRagDetails] = useState(false);
   const [formData, setFormData] = useState({
     id: agent?.id || "",
     display_name: agent?.display_name || "",
@@ -93,6 +95,33 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
   });
 
   const tools = toolsData?.tools || [];
+
+  // Debounced autosave when editing an existing agent
+  useEffect(() => {
+    if (!open || !agent) return;
+    const id = agent.id;
+    const handle = setTimeout(() => {
+      const payload = {
+        ...formData,
+        id,
+        answer_model: "gpt-5",
+        rerank_model: "gpt-5-mini",
+        top_k: 12,
+        rag_settings: formData.rag_settings,
+        tool_allowlist: selectedTools,
+      } as any;
+      api
+        .saveAgent(payload)
+        .then(() => {
+          try { queryClient.invalidateQueries({ queryKey: ["agents"] }); } catch {}
+        })
+        .catch(() => {
+          // silent during typing; explicit error shown on manual save
+        });
+    }, 800);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, agent?.id, formData.display_name, formData.system_prompt, formData.namespace, JSON.stringify(formData.rag_settings), JSON.stringify(selectedTools)]);
 
   const saveAgent = useMutation({
     mutationFn: api.saveAgent,
@@ -154,7 +183,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl w-[880px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="w-full sm:max-w-[95vw] md:max-w-3xl lg:max-w-4xl xl:max-w-5xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {agent ? "Edit Agent" : "Create New Agent"}
@@ -225,14 +254,27 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
                 size="sm"
                 onClick={async () => {
                   const txt = formData.system_prompt || "";
-                  if (!txt.trim()) return;
+                  if (!txt.trim()) {
+                    toast({ title: "Add a prompt first", description: "Write a system prompt to improve.", variant: "destructive" });
+                    return;
+                  }
                   try {
+                    setRewriteLoading(true);
                     const { rewritten } = await api.rewritePrompt(txt);
-                    setFormData({ ...formData, system_prompt: rewritten || txt });
-                  } catch (_) {}
+                    const nextText = (rewritten || txt).trim();
+                    setFormData({ ...formData, system_prompt: nextText });
+                    if (nextText === txt.trim()) {
+                      toast({ title: "No changes suggested", description: "AI kept your prompt as-is." });
+                    } else {
+                      toast({ title: "Prompt improved", description: "AI refined your system prompt." });
+                    }
+                  } catch (e) {
+                    toast({ title: "Failed to improve", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+                  }
+                  finally { setRewriteLoading(false); }
                 }}
               >
-                Improve with AI
+                {rewriteLoading ? "Improving..." : "Improve with AI"}
               </Button>
               <p className="text-xs text-gray-500">AI will rewrite the prompt for clarity and safety.</p>
             </div>
@@ -288,71 +330,86 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
           </div>
 
           {/* Models and Top K are set to safe defaults and hidden */}
-          {/* RAG Settings */}
+          {/* RAG Settings - simplified presets for non-technical users */}
           <div className="space-y-3 mt-4">
-            <Label>RAG Settings</Label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="text-sm font-medium flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={!!formData.rag_settings.rerank}
-                    onChange={(e) => setFormData({
-                      ...formData,
-                      rag_settings: { ...formData.rag_settings, rerank: e.target.checked }
-                    })}
-                  />
-                  Enable LLM Rerank
-                </label>
-                <p className="text-xs text-gray-500">Improves result quality by reordering context with AI. Turn off for maximum speed.</p>
-              </div>
-
-              <div className="space-y-1">
-                <Label>Query Expansions</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={3}
-                  value={formData.rag_settings.expansions}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    rag_settings: { ...formData.rag_settings, expansions: parseInt(e.target.value || '0') }
-                  })}
-                />
-                <p className="text-xs text-gray-500">Extra phrasing variants to broaden retrieval. 0–1 recommended for speed.</p>
-              </div>
-
-              <div className="space-y-1">
-                <Label>Dense Fuse (per expansion)</Label>
-                <Input
-                  type="number"
-                  min={4}
-                  max={16}
-                  value={formData.rag_settings.k_dense_fuse}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    rag_settings: { ...formData.rag_settings, k_dense_fuse: parseInt(e.target.value || '8') }
-                  })}
-                />
-                <p className="text-xs text-gray-500">How many top dense results to keep per expanded query.</p>
-              </div>
-
-              <div className="space-y-1">
-                <Label>MMR Lambda</Label>
-                <Input
-                  type="number"
-                  step="0.05"
-                  min={0}
-                  max={1}
-                  value={formData.rag_settings.mmr_lambda}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    rag_settings: { ...formData.rag_settings, mmr_lambda: parseFloat(e.target.value || '0.6') }
-                  })}
-                />
-                <p className="text-xs text-gray-500">Balance between relevance and diversity (higher = relevance).</p>
-              </div>
+            <Label>Results Quality</Label>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {[
+                { key: 'fast', title: 'Fast', hint: 'Quickest responses', val: { rerank: false, expansions: 0, k_dense_fuse: 6, mmr_lambda: 0.5 } },
+                { key: 'balanced', title: 'Balanced', hint: 'Good quality + speed', val: { rerank: true, expansions: 1, k_dense_fuse: 8, mmr_lambda: 0.6 } },
+                { key: 'accurate', title: 'Accurate', hint: 'Best quality', val: { rerank: true, expansions: 2, k_dense_fuse: 12, mmr_lambda: 0.7 } },
+              ].map(p => (
+                <button
+                  key={p.key}
+                  type="button"
+                  className={`border rounded p-3 text-left hover:bg-gray-50 ${JSON.stringify(formData.rag_settings)===JSON.stringify(p.val) ? 'border-blue-500' : 'border-gray-200'}`}
+                  onClick={() => {
+                    setFormData({ ...formData, rag_settings: p.val as any });
+                    setShowRagDetails(true);
+                  }}
+                >
+                  <div className="font-medium text-sm">{p.title}</div>
+                  <div className="text-xs text-gray-500">{p.hint}</div>
+                </button>
+              ))}
             </div>
+            {showRagDetails && (
+              <div className="mt-3 border rounded p-3 bg-gray-50">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">Technical RAG Settings</div>
+                  <button
+                    type="button"
+                    className="text-xs underline"
+                    onClick={() => setShowRagDetails(false)}
+                  >Hide</button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Rerank</Label>
+                    <div className="flex items-center gap-2 p-2 border rounded bg-white">
+                      <input
+                        type="checkbox"
+                        checked={!!formData.rag_settings?.rerank}
+                        onChange={(e) => setFormData({ ...formData, rag_settings: { ...(formData.rag_settings || {}), rerank: e.target.checked } })}
+                      />
+                      <span className="text-xs">Enable reranker</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Expansions</Label>
+                    <Input
+                      type="number"
+                      value={formData.rag_settings?.expansions ?? 0}
+                      onChange={(e) => setFormData({ ...formData, rag_settings: { ...(formData.rag_settings || {}), expansions: Number(e.target.value) } })}
+                      min={0}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Dense Fuse (k)</Label>
+                    <Input
+                      type="number"
+                      value={formData.rag_settings?.k_dense_fuse ?? 8}
+                      onChange={(e) => setFormData({ ...formData, rag_settings: { ...(formData.rag_settings || {}), k_dense_fuse: Number(e.target.value) } })}
+                      min={1}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">MMR Lambda</Label>
+                    <Input
+                      type="number"
+                      value={formData.rag_settings?.mmr_lambda ?? 0.6}
+                      onChange={(e) => setFormData({ ...formData, rag_settings: { ...(formData.rag_settings || {}), mmr_lambda: Number(e.target.value) } })}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                    />
+                  </div>
+                </div>
+                <div className="text-xs text-gray-600 mt-2">
+                  Applied: {JSON.stringify(formData.rag_settings)}
+                </div>
+              </div>
+            )}
           </div>
 
           <DialogFooter>
@@ -374,6 +431,8 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
                       if (data.api_key) {
                         setApiKey(data.api_key);
                         navigator.clipboard?.writeText(data.api_key).catch(() => {});
+                        // Refresh agents list so API tab reflects new key immediately
+                        try { queryClient.invalidateQueries({ queryKey: ["agents"] }); } catch {}
                       }
                     } catch {}
                   }}
@@ -391,19 +450,7 @@ export function AgentModal({ open, onOpenChange, agent }: AgentModalProps) {
               Cancel
             </Button>
             <Button type="submit" disabled={saveAgent.isPending}>
-              {saveAgent.isPending ? "Saving..." : agent ? "Update Agent" : "Create Agent"}
-            </Button>
-            <Button
-              type="button"
-              disabled={saveAgent.isPending}
-              onClick={(e) => {
-                // Submit then provision assistants
-                e.preventDefault();
-                const fakeEvt = { preventDefault() {} } as unknown as React.FormEvent;
-                handleSubmit(fakeEvt);
-              }}
-            >
-              Create & Provision
+              {saveAgent.isPending ? "Saving..." : agent ? "Save Changes" : "Create Agent"}
             </Button>
           </DialogFooter>
         </form>

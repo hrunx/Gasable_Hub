@@ -1,0 +1,48 @@
+feat: Fix workflow UI spacing, requirements panel, and execution
+
+## Fixed Issues
+
+### 1. Node Congestion & Spacing
+- Increased node dimensions to 320x240 for better readability
+- Increased rank separation to 250px and node separation to 200px
+- Force re-layout for all imported workflows to ensure proper spacing
+- Nodes now display in a clear hierarchical flow
+
+### 2. Empty Workflow Requirements Panel  
+- Enhanced requirement collection to check multiple data sources
+- Added comprehensive console logging for debugging
+- Show all tools used in workflow, even without credentials
+- Fixed TypeScript types for proper type safety
+- Improved visual styling with amber alerts for required credentials
+
+### 3. Workflow Execution Error: "Unsupported node type"
+- Updated backend workflow executor to handle XYFlow UI node types:
+  * startNode/start → Skip (UI marker only)
+  * toolNode → Convert to tool execution
+  * agentNode → Convert to tool execution  
+  * decisionNode → Convert to mapper
+- Extract tool name from data.toolName for UI nodes
+- Graceful handling of unknown node types
+
+## Files Changed
+
+### Frontend
+- `src/app/workflows/[id]/page.tsx` - Layout config, requirements collection, type fixes
+- `src/lib/layout.ts` - (new) Dagre layout utilities
+- `src/lib/api.ts` - Added getWorkflowEnriched() endpoint
+- `src/components/workflow/nodes/ToolNode.tsx` - Enhanced with credentials display
+
+### Backend
+- `webapp.py` - Added workflow enrichment endpoint with node spec lookups
+- `gasable_hub/workflows/runtime.py` - Node type normalization for UI types
+
+### Dependencies
+- Added `dagre` and `@types/dagre` for graph layout
+
+## Testing
+Run `./test_workflow_system.sh` to verify all fixes
+
+## Result
+Workflows now display with proper spacing, show complete requirements,
+and execute without node type errors. Ready for n8n workflow proxy usage!
+

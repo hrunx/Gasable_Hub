@@ -1,0 +1,20 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "notion", "version": "v1" },
+  "servers": [ { "url": "https://api.notion.com/v1" } ],
+  "paths": {
+    "/search": {
+      "post": {
+        "operationId": "search",
+        "summary": "Search pages and databases",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        }
+      }
+    }
+  }
+}
+
+
